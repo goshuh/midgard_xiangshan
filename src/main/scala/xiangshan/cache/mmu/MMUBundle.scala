@@ -27,6 +27,10 @@ import freechips.rocketchip.diplomacy.{LazyModule, LazyModuleImp}
 import freechips.rocketchip.tilelink._
 import xiangshan.backend.fu.{PMPReqBundle, PMPConfig}
 
+import midgard._
+import midgard.frontside._
+
+
 
 abstract class TlbBundle(implicit p: Parameters) extends XSBundle with HasTlbConst
 abstract class TlbModule(implicit p: Parameters) extends XSModule with HasTlbConst
@@ -55,31 +59,34 @@ class TlbPMBundle(implicit p: Parameters) extends TlbBundle {
   val r = Bool()
   val w = Bool()
   val x = Bool()
-  val c = Bool()
+  val c = Bool()  //Cacheable
   val atomic = Bool()
 
   def assign_ap(pm: PMPConfig) = {
     r := pm.r
     w := pm.w
     x := pm.x
-    c := pm.c
+    c := pm.c 
     atomic := pm.atomic
   }
 }
 
+//Perm: Permissions
 class TlbPermBundle(implicit p: Parameters) extends TlbBundle {
   val pf = Bool() // NOTE: if this is true, just raise pf
   val af = Bool() // NOTE: if this is true, just raise af
   // pagetable perm (software defined)
-  val d = Bool()
-  val a = Bool()
-  val g = Bool()
-  val u = Bool()
+  val d = Bool()  //Dirty
+  val a = Bool()  //Access
+  val g = Bool()  //Global
+  val u = Bool()  //User
   val x = Bool()
   val w = Bool()
   val r = Bool()
+  //If RWX are all 0, then this page table entry is the pointer to
+  //next level page table or a Leaf PTE
 
-  val pm = new TlbPMBundle
+  val pm = new TlbPMBundle  //For PMP
 
   override def toPrintable: Printable = {
     p"pf:${pf} af:${af} d:${d} a:${a} g:${g} u:${u} x:${x} w:${w} r:${r} " +
@@ -180,6 +187,10 @@ class TlbData(superpage: Boolean = false)(implicit p: Parameters) extends TlbBun
 
 }
 
+/*
+  asid: Address Space ID: Identifies the address space in case two virtual addresses are same. Solves homonyms.
+  Super Page: Any page that is bigger than 4-KB
+ */
 class TlbEntry(pageNormal: Boolean, pageSuper: Boolean)(implicit p: Parameters) extends TlbBundle {
   require(pageNormal || pageSuper)
 
@@ -272,6 +283,9 @@ object TlbCmd {
   def isWrite(a: UInt) = a(1,0)===write
   def isExec(a: UInt) = a(1,0)===exec
 
+  //Atomic: Read and Writes are done in a single step
+  //Two different threads operating on the same variable can not
+  //observe any atomic operation half way through.
   def isAtom(a: UInt) = a(2)
   def isAmo(a: UInt) = a===atom_write // NOTE: sc mixed
 }
@@ -411,6 +425,11 @@ class TlbPtwIO(Width: Int = 1)(implicit p: Parameters) extends TlbBundle {
   }
 }
 
+class VlbPtwIO(Width: Int = 1, P: Param)(implicit p: Parameters) extends TlbBundle {
+  val req = (DecoupledIO(new VLBReq (P)))
+  val resp = Flipped(ValidIO(new VMA    (P)))
+}
+
 class MMUIOBaseBundle(implicit p: Parameters) extends TlbBundle {
   val sfence = Input(new SfenceBundle)
   val csr = Input(new TlbCsrBundle)
@@ -426,6 +445,12 @@ class TlbIO(Width: Int, q: TLBParameters)(implicit p: Parameters) extends
 
 }
 
+class VlbIO(Width: Int, q: TLBParameters, P: Param)(implicit p: Parameters) extends
+  MMUIOBaseBundle {
+  val requestor = Vec(Width, Flipped(new TlbRequestIO))
+  val ptw = new VlbPtwIO(Width, P)
+}
+
 class BTlbPtwIO(Width: Int)(implicit p: Parameters) extends TlbBundle {
   val req = Vec(Width, DecoupledIO(new PtwReq))
   val resp = Flipped(DecoupledIO(new Bundle {
@@ -434,6 +459,7 @@ class BTlbPtwIO(Width: Int)(implicit p: Parameters) extends TlbBundle {
   }))
 
 }
+
 /****************************  Bridge TLB *******************************/
 
 class BridgeTLBIO(Width: Int)(implicit p: Parameters) extends MMUIOBaseBundle {

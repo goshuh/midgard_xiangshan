@@ -90,9 +90,9 @@ class ICacheMainPipeInterface(implicit p: Parameters) extends ICacheBundle {
   val mshr        = Vec(PortNumber, new ICacheMSHRBundle)
   val errors      = Output(Vec(PortNumber, new L1CacheErrorInfo))
   /*** outside interface ***/
-  val fetch       = Vec(PortNumber, new ICacheMainPipeBundle)
+  val fetch       = Vec(PortNumber, new ICacheMainPipeBundle) //Currently PortNumber is 2, so 2 ports to be connected to IFU
   val pmp         = Vec(PortNumber, new ICachePMPBundle)
-  val itlb        = Vec(PortNumber * 2, new BlockTlbRequestIO)
+  val itlb        = Vec(PortNumber * 2, new BlockTlbRequestIO)  //Next 2 ports are connected to ITLB
   val respStall   = Input(Bool())
   val perfInfo = Output(new ICachePerfInfo)
 
@@ -157,6 +157,7 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
 
   val tlb_slot = RegInit(0.U.asTypeOf(new tlbMissSlot))
 
+  //If the request results in a Miss, send it to the Miss Slot and ignore request from IFU until the TLB Miss is served
   val s0_final_vaddr        = Mux(tlb_slot.valid,tlb_slot.req_vaddr ,s0_req_vaddr)
   val s0_final_vsetIdx      = Mux(tlb_slot.valid,tlb_slot.req_vsetIdx ,s0_req_vsetIdx)
   val s0_final_only_first   = Mux(tlb_slot.valid,tlb_slot.only_first ,s0_only_first)
@@ -165,13 +166,20 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
 
 
   /** SRAM request */
-  val fetch_req = List(toMeta, toData)
+  val fetch_req = List(toMeta, toData)  //Tag and Data
   for(i <- 0 until 2) {
-    fetch_req(i).valid             := (s0_valid || tlb_slot.valid) && !missSwitchBit
+    //Either a request from IFU must be valid or there must have been a miss on tlb and request is in tlb slot
+    fetch_req(i).valid             := (s0_valid || tlb_slot.valid) && !missSwitchBit  
     fetch_req(i).bits.isDoubleLine := s0_final_double_line
-    fetch_req(i).bits.vSetIdx      := s0_final_vsetIdx
+    fetch_req(i).bits.vSetIdx      := s0_final_vsetIdx  //Set Selection in parallel with TLB Lookup
   }
 
+  /*First two requests come from the IFU.
+    Next Two Requests come from the TLB Miss Slots.
+    If The request on first two ports miss, a Miss Slot
+    is created and the request is forwarded to next two ports
+    of the TLB to do a PTW.
+   */
   toITLB(0).valid         := s0_valid  
   toITLB(0).bits.size     := 3.U // TODO: fix the size
   toITLB(0).bits.vaddr    := s0_req_vaddr(0)
@@ -198,21 +206,26 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
     port.bits.debug.isFirstIssue  := DontCare
   }
 
-  /** ITLB miss wait logic */
+  //** ITLB miss wait logic *//
 
   //** tlb 0/1 port result **//
+  //IFU results in a Miss
+  //!Hit/Miss response is sent by the ITLB in the same clock cycle!
   val tlb_miss_vec = VecInit((0 until PortNumber).map( i => toITLB(i).valid && fromITLB(i).bits.miss ))
-  val tlb_has_miss = tlb_miss_vec.reduce(_||_)
+  val tlb_has_miss = tlb_miss_vec.reduce(_||_)  //If this is true then there is a TLB Miss
   val tlb_miss_flush = RegNext(tlb_has_miss) && RegNext(s0_fetch_fire)
 
   //** tlb 2/3 port result **//
+  //Miss in TLB is now Resolved
   val tlb_resp = Wire(Vec(2, Bool()))
   tlb_resp(0) := !fromITLB(2).bits.miss && toITLB(2).valid
   tlb_resp(1) := (!fromITLB(3).bits.miss && toITLB(3).valid) || !tlb_slot.double_line
-  val tlb_all_resp = RegNext(tlb_resp.reduce(_&&_))
+  val tlb_all_resp = RegNext(tlb_resp.reduce(_&&_)) //*TLB Miss have been resolved and now the requested entry is Valid
 
   XSPerfAccumulate("icache_bubble_s0_tlb_miss",    s0_valid && tlb_has_miss )
 
+  //In case of a TLB Miss where the slot is not valid,
+  //Create a new valid TLB Miss slot
   when(tlb_has_miss && !tlb_slot.valid){
     tlb_slot.valid := s0_valid
     tlb_slot.only_first := s0_only_first
@@ -221,15 +234,17 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
     tlb_slot.req_vsetIdx := s0_req_vsetIdx
   }
 
-
+  //When the TLB slot is filled and the TLB responds with the correct data, Empty the slot!
   when(tlb_slot.valid && tlb_all_resp && s0_can_go){
     tlb_slot.valid := false.B
   }
 
-  s0_can_go      := !missSwitchBit && s1_ready && fetch_req(0).ready && fetch_req(1).ready  
-  s0_slot_fire   := tlb_slot.valid && tlb_all_resp && s0_can_go
-  s0_fetch_fire  := s0_valid && !tlb_slot.valid && s0_can_go
-  s0_fire        := s0_slot_fire || s0_fetch_fire              
+  //s0 can proceed to the next stage if SRAM can accept Set Index request from IFU and the TLB has responded with a hit on both ports
+  //Most probably the Physical Tag is not present 
+  s0_can_go      := !missSwitchBit && s1_ready && fetch_req(0).ready && fetch_req(1).ready //SRAM has accepted the Set Index: Either from TLB Miss Slot or from the IFU
+  s0_slot_fire   := tlb_slot.valid && tlb_all_resp && s0_can_go //Slot is valid and Requests from slots have been served by the TLB.
+  s0_fetch_fire  := s0_valid && !tlb_slot.valid && s0_can_go  //Slot is invalid but there is a Request from IFU
+  s0_fire        := s0_slot_fire || s0_fetch_fire //Either of above two and the SRAM has accepted the Set Index
 
   //TODO: fix GTimer() condition
   fromIFU.map(_.ready := fetch_req(0).ready && fetch_req(1).ready && !missSwitchBit  &&
@@ -269,14 +284,17 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
 
   tlbRespAllValid := s1_tlb_all_resp_wire || s1_tlb_all_resp_reg
 
+  // 0 to PortNumber will be direct hits as they were not buffered in the Miss Slots
   val hit_tlbRespPAddr = ResultHoldBypass(valid = RegNext(s0_fire), data = VecInit((0 until PortNumber).map( i => fromITLB(i).bits.paddr)))
   val hit_tlbExcpPF    = ResultHoldBypass(valid = RegNext(s0_fire), data = VecInit((0 until PortNumber).map( i => fromITLB(i).bits.excp.pf.instr && fromITLB(i).valid)))   
   val hit_tlbExcpAF    = ResultHoldBypass(valid = RegNext(s0_fire), data = VecInit((0 until PortNumber).map( i => fromITLB(i).bits.excp.af.instr && fromITLB(i).valid)))   
 
+  // PortNumber to 2*PortNumber are TLB Misses as they were buffered in Miss Slots
   val miss_tlbRespPAddr = ResultHoldBypass(valid = RegNext(s0_fire), data = VecInit((PortNumber until PortNumber * 2).map( i => fromITLB(i).bits.paddr)))
   val miss_tlbExcpPF    = ResultHoldBypass(valid = RegNext(s0_fire), data = VecInit((PortNumber until PortNumber * 2).map( i => fromITLB(i).bits.excp.pf.instr && fromITLB(i).valid)))    
   val miss_tlbExcpAF    = ResultHoldBypass(valid = RegNext(s0_fire), data = VecInit((PortNumber until PortNumber * 2).map( i => fromITLB(i).bits.excp.af.instr && fromITLB(i).valid))) 
 
+  // If the request was TLB Miss, then take from Miss Slot instead of IFU request
   val tlbRespPAddr  = Mux(s1_tlb_miss,miss_tlbRespPAddr,hit_tlbRespPAddr )
   val tlbExcpPF     = Mux(s1_tlb_miss,miss_tlbExcpPF,hit_tlbExcpPF )
   val tlbExcpAF     = Mux(s1_tlb_miss,miss_tlbExcpAF,hit_tlbExcpAF )
@@ -292,11 +310,13 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
   val s1_data_cacheline          = ResultHoldBypass(data = dataResp.datas, valid = RegNext(s0_fire))
   val s1_data_errorBits          = ResultHoldBypass(data = dataResp.codes, valid = RegNext(s0_fire))
 
-  val s1_tag_eq_vec        = VecInit((0 until PortNumber).map( p => VecInit((0 until nWays).map( w =>  s1_meta_ptags(p)(w) ===  s1_req_ptags(p) ))))
+  val s1_tag_eq_vec        = VecInit((0 until PortNumber).map( p => VecInit((0 until nWays).map( w =>  s1_meta_ptags(p)(w) ===  s1_req_ptags(p) ))))  //Comparing the Physical Tags from the Cache Set and Requested Address
   val s1_tag_match_vec     = VecInit((0 until PortNumber).map( k => VecInit(s1_tag_eq_vec(k).zipWithIndex.map{ case(way_tag_eq, w) => way_tag_eq && s1_meta_cohs(k)(w).isValid()})))
-  val s1_tag_match         = VecInit(s1_tag_match_vec.map(vector => ParallelOR(vector)))
+  val s1_tag_match         = VecInit(s1_tag_match_vec.map(vector => ParallelOR(vector)))  //High if any Tag in the set matches with the requested Address Tag
 
+  //Tag Match without any Exception
   val s1_port_hit          = VecInit(Seq(s1_tag_match(0) && s1_valid  && !tlbExcpPF(0) && !tlbExcpAF(0),  s1_tag_match(1) && s1_valid && s1_double_line && !tlbExcpPF(1) && !tlbExcpAF(1) ))
+  //No Tag Match but no Exception either
   val s1_bank_miss         = VecInit(Seq(!s1_tag_match(0) && s1_valid && !tlbExcpPF(0) && !tlbExcpAF(0), !s1_tag_match(1) && s1_valid && s1_double_line && !tlbExcpPF(1) && !tlbExcpAF(1) ))
   val s1_hit               = (s1_port_hit(0) && s1_port_hit(1)) || (!s1_double_line && s1_port_hit(0))
 

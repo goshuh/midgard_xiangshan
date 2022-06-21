@@ -25,6 +25,8 @@ import xiangshan.backend.fu.{PFEvent, PMP, PMPChecker,PMPReqBundle}
 import xiangshan.cache.mmu._
 import xiangshan.frontend.icache._
 
+import midgard._
+import midgard.frontside._
 
 class Frontend()(implicit p: Parameters) extends LazyModule with HasXSParameter{
 
@@ -43,7 +45,7 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
     val hartId = Input(UInt(8.W))
     val reset_vector = Input(UInt(PAddrBits.W))
     val fencei = Input(Bool())
-    val ptw = new TlbPtwIO(6)
+    val ptw = new VlbPtwIO(6, new midgard.Param)
     val backend = new FrontendToCtrlIO
     val sfence = Input(new SfenceBundle)
     val tlbCsr = Input(new TlbCsrBundle)
@@ -114,14 +116,16 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   // ifu.io.iTLBInter.resp  <> itlb_requestors(1).resp
   // icache.io.itlb(1).resp <> itlb_requestors(1).resp
 
-  io.ptw <> TLB(
+  //i-VLB
+  io.ptw <> MidgardFSVLBWrapper(
     //in = Seq(icache.io.itlb(0), icache.io.itlb(1)),
     in = Seq(itlb_requestors(0),itlb_requestors(1),itlb_requestors(2),itlb_requestors(3),itlb_requestors(4),itlb_requestors(5)),
     sfence = io.sfence,
     csr = tlbCsr,
     width = 6,
     shouldBlock = true,
-    itlbParams
+    itlbParams,
+    midgard.Param()
   )
 
   icache.io.prefetch <> ftq.io.toPrefetch

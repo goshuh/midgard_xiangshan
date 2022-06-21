@@ -30,13 +30,30 @@ import xiangshan.backend.fu.util.HasCSRConst
 
 @chiselName
 class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModule with HasCSRConst with HasPerfEvents {
-  val io = IO(new TlbIO(Width, q))
+  /*
+    This Module:
+      1. Instantiates Super and Normal TLB Storage modules: There are multiple ports in the TLB, specified by WIDTH.
+      2. Connects the Request Channel TLBs to the outside module using IO
+      3. Performs TLB Reads using Requests coming from the channel using TLBNormalRead():
+          a. This function Reads Both Super and Normal TLB.
+          b. It checks various permissions and reports if there was any hit or miss
+          c. In case sameCycle is enabled, this information is sent in the same clock cycle
+              as the request arrived.
+          d. In case of a hit, the Physical Address is sent to the requester as well.
+      4. In case of a miss, the PTW is sent a request to get the PPN using VPN.
+      5. PTW gives a response on a request and asserts the "refill" signal
+      6. The Super/Normal TLB write the response as soon as the PTW response is valid
+   */
+  val io = IO(new TlbIO(Width, q))  //Width is the number of ports in the TLB
 
   require(q.superAssociative == "fa")
   if (q.sameCycle || q.missSameCycle) {
     require(q.normalAssociative == "fa")
   }
 
+  //All req and resp are for the TLB Requests from the processor!
+  //req will have the VPN, Command:RWX, Size, ROB_ID
+  //resp will contain the PPN, Hit/Fast-Hit or Miss/Fast-Miss information and Exception information
   val req = io.requestor.map(_.req)
   val resp = io.requestor.map(_.resp)
   val ptw = io.ptw
@@ -45,12 +62,14 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
   val sfence = io.sfence
   val csr = io.csr
   val satp = csr.satp
-  val priv = csr.priv
+  val priv = csr.priv //CSR include in VLB
   val ifecth = if (q.fetchi) true.B else false.B
   val mode = if (q.useDmode) priv.dmode else priv.imode
-  // val vmEnable = satp.mode === 8.U // && (mode < ModeM) // FIXME: fix me when boot xv6/linux...
+  // val vmEnable = satp.mode === 8.U // && (mode < ModeM) // !FIXME: fix me when boot xv6/linux...
   val vmEnable = if (EnbaleTlbDebug) (satp.mode === 8.U)
   else (satp.mode === 8.U && (mode < ModeM))
+  //Midgard has mode 15
+  //If vmEnale is false, VA = PA and no miss
 
   val reqAddr = req.map(_.bits.vaddr.asTypeOf(new VaBundle))
   val vpn = reqAddr.map(_.vpn)
@@ -61,6 +80,7 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
 
   def widthMap[T <: Data](f: Int => T) = (0 until Width).map(f)
 
+  //Instantiates Super and Normal TLB Storage modules: There are multiple ports in the TLB, specified by WIDTH.
   // Normal page && Super page
   val normalPage = TlbStorage(
     name = "normal",
@@ -87,7 +107,12 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
     superPage = true,
   )
 
-
+  /*
+    Normal and Super TLBs are accessed in parallel to get the Physical Tag for both Normal and Super Page.
+    This is required because the caches are VIPT. 
+    At the same time, the Cache Set is indexed by the Page Offset bits
+   */
+  //Connects the Request Channel TLBs to the outside module using IO
   for (i <- 0 until Width) {
     normalPage.r_req_apply(
       valid = io.requestor(i).req.valid,
@@ -110,22 +135,25 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
   normalPage.csr <> io.csr
   superPage.csr <> io.csr
 
+  //Performs TLB Reads using Requests coming from the channel using TLBNormalRead()
+  //*_hit_sameCycle: is the hit/miss response coming at the same clock cycle as the request.
   def TLBNormalRead(i: Int) = {
     val (n_hit_sameCycle, normal_hit, normal_ppn, normal_perm) = normalPage.r_resp_apply(i)
     val (s_hit_sameCycle, super_hit, super_ppn, super_perm) = superPage.r_resp_apply(i)
     // assert(!(normal_hit && super_hit && vmEnable && RegNext(req(i).valid, init = false.B)))
 
-    val hit = normal_hit || super_hit
-    val hit_sameCycle = n_hit_sameCycle || s_hit_sameCycle
-    val ppn = Mux(super_hit, super_ppn, normal_ppn)
-    val perm = Mux(super_hit, super_perm, normal_perm)
+    //Checks various permissions and reports if there was any hit or miss
+    val hit = normal_hit || super_hit   //Hit on either Normal TLB or Super TLB
+    val hit_sameCycle = n_hit_sameCycle || s_hit_sameCycle  //Responded on same cycle as the request
+    val ppn = Mux(super_hit, super_ppn, normal_ppn)   //Select either Super PPN or Norma PPN based on where the request Hit.
+    val perm = Mux(super_hit, super_perm, normal_perm)  // Permissions.
 
-    val pf = perm.pf
-    val af = perm.af
-    val cmdReg = if (!q.sameCycle) RegNext(cmd(i)) else cmd(i)
-    val validReg = if (!q.sameCycle) RegNext(valid(i)) else valid(i)
-    val offReg = if (!q.sameCycle) RegNext(reqAddr(i).off) else reqAddr(i).off
-    val sizeReg = if (!q.sameCycle) RegNext(req(i).bits.size) else req(i).bits.size
+    val pf = perm.pf  //Page Fault Exception Coming from the TLB Entry
+    val af = perm.af  //Access Fault Exception Coming from the TLB Entry
+    val cmdReg = if (!q.sameCycle) RegNext(cmd(i)) else cmd(i)  //Command: Request for Read, Write, Execute, Atomic Read, Atomic Write
+    val validReg = if (!q.sameCycle) RegNext(valid(i)) else valid(i)  //Valid Request or not
+    val offReg = if (!q.sameCycle) RegNext(reqAddr(i).off) else reqAddr(i).off  //Offset
+    val sizeReg = if (!q.sameCycle) RegNext(req(i).bits.size) else req(i).bits.size 
 
     /** *************** next cycle when two cycle is false******************* */
     val miss = !hit && vmEnable
@@ -136,16 +164,20 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
 
     XSDebug(validReg, p"(${i.U}) hit:${hit} miss:${miss} ppn:${Hexadecimal(ppn)} perm:${perm}\n")
 
-    val paddr = Cat(ppn, offReg)
-    val vaddr = SignExt(req(i).bits.vaddr, PAddrBits)
-    val refill_reg = RegNext(io.ptw.resp.valid)
-    req(i).ready := resp(i).ready
+    // In case of a hit, the Physical Address is sent to the requester as well.
+    val paddr = Cat(ppn, offReg)  //PA: PPN + OFFSET
+    val vaddr = SignExt(req(i).bits.vaddr, PAddrBits)//?Sign extend Virtual Address to make it as atleast as big as physical Address. **Why? Isn't VA supposed to be larger than PA?**
+    val refill_reg = RegNext(io.ptw.resp.valid) //?We haven't sent PTW any request, how to expect response?
+    req(i).ready := resp(i).ready   //?If the Requester is ready to accept the response, only then accept the request?
     resp(i).valid := validReg
-    resp(i).bits.paddr := Mux(vmEnable, paddr, if (!q.sameCycle) RegNext(vaddr) else vaddr)
+    resp(i).bits.paddr := Mux(vmEnable, paddr, if (!q.sameCycle) RegNext(vaddr) else vaddr) //We need to kepp vmEnable 1
     resp(i).bits.miss := { if (q.missSameCycle) miss_sameCycle else (miss || refill_reg) }
+    //  If the refill is asserted and we receive the TLB enty from Page Table, then a Miss is reported any way.
+    //  *This will trigger a Miss and a re-request Hopefully
     resp(i).bits.fast_miss := fast_miss || refill_reg
     resp(i).bits.ptwBack := io.ptw.resp.fire()
 
+    //pmp: Physical Memory Protection
     // for timing optimization, pmp check is divided into dynamic and static
     // dynamic: superpage (or full-connected reg entries) -> check pmp when translation done
     // static: 4K pages (or sram entries) -> check pmp with pre-checked results
@@ -155,20 +187,21 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
     pmp(i).bits.size := sizeReg
     pmp(i).bits.cmd := cmdReg
 
-    val ldUpdate = !perm.a && TlbCmd.isRead(cmdReg) && !TlbCmd.isAmo(cmdReg) // update A/D through exception
+    //Permission Checks
+    val ldUpdate = !perm.a && TlbCmd.isRead(cmdReg) && !TlbCmd.isAmo(cmdReg) //update A/D through exception
     val stUpdate = (!perm.a || !perm.d) && (TlbCmd.isWrite(cmdReg) || TlbCmd.isAmo(cmdReg)) // update A/D through exception
     val instrUpdate = !perm.a && TlbCmd.isExec(cmdReg) // update A/D through exception
-    val modeCheck = !(mode === ModeU && !perm.u || mode === ModeS && perm.u && (!priv.sum || ifecth))
+    val modeCheck = !(mode === ModeU && !perm.u || mode === ModeS && perm.u && (!priv.sum || ifecth)) //Fail
     val ldPermFail = !(modeCheck && (perm.r || priv.mxr && perm.x))
     val stPermFail = !(modeCheck && perm.w)
-    val instrPermFail = !(modeCheck && perm.x)
+    val instrPermFail = !(modeCheck && perm.x)  //Instruction Permission Pass if Mode is correct and has execute permission
     val ldPf = (ldPermFail || pf) && (TlbCmd.isRead(cmdReg) && !TlbCmd.isAmo(cmdReg))
     val stPf = (stPermFail || pf) && (TlbCmd.isWrite(cmdReg) || TlbCmd.isAmo(cmdReg))
     val instrPf = (instrPermFail || pf) && TlbCmd.isExec(cmdReg)
     val fault_valid = vmEnable
-    resp(i).bits.excp.pf.ld := (ldPf || ldUpdate) && fault_valid && !af
-    resp(i).bits.excp.pf.st := (stPf || stUpdate) && fault_valid && !af
-    resp(i).bits.excp.pf.instr := (instrPf || instrUpdate) && fault_valid && !af
+    resp(i).bits.excp.pf.ld := (ldPf || ldUpdate) && fault_valid && !af //This will be created only for Data TLB
+    resp(i).bits.excp.pf.st := (stPf || stUpdate) && fault_valid && !af //This will be created only for Data TLB
+    resp(i).bits.excp.pf.instr := (instrPf || instrUpdate) && fault_valid && !af  //This will be created only for Instruction TLB
     // NOTE: pf need && with !af, page fault has higher priority than access fault
     // but ptw may also have access fault, then af happens, the translation is wrong.
     // In this case, pf has lower priority than af
@@ -180,7 +213,7 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
     resp(i).bits.excp.af.st    := (af || (spm_v && !spm.w)) && TlbCmd.isWrite(cmdReg) && fault_valid
     resp(i).bits.excp.af.instr := (af || (spm_v && !spm.x)) && TlbCmd.isExec(cmdReg) && fault_valid
     resp(i).bits.static_pm.valid := spm_v && fault_valid // ls/st unit should use this mmio, not the result from pmp
-    resp(i).bits.static_pm.bits := !spm.c
+    resp(i).bits.static_pm.bits := !spm.c //Non Cacheable
 
     (hit, miss, validReg)
   }
@@ -193,11 +226,12 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
   // replacement
   def get_access(one_hot: UInt, valid: Bool): Valid[UInt] = {
     val res = Wire(Valid(UInt(log2Up(one_hot.getWidth).W)))
-    res.valid := Cat(one_hot).orR && valid
+    res.valid := Cat(one_hot).orR && valid  //orR: Or Reduction operator
     res.bits := OHToUInt(one_hot)
     res
   }
 
+  //?This is used to identify the TLB entry to be replaced?
   val normal_refill_idx = if (q.outReplace) {
     io.replace.normalPage.access <> normalPage.access
     io.replace.normalPage.chosen_set := get_set_idx(io.ptw.resp.bits.entry.tag, q.normalNSets)
@@ -214,7 +248,7 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
 
   val super_refill_idx = if (q.outReplace) {
     io.replace.superPage.access <> superPage.access
-    io.replace.superPage.chosen_set := DontCare
+    io.replace.superPage.chosen_set := DontCare //Probably because it is Fully Associative
     io.replace.superPage.refillIdx
   } else {
     val re = ReplacementPolicy.fromString(q.superReplacer, q.superNWays)
@@ -222,7 +256,10 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
     re.way
   }
 
-  val refill = ptw.resp.fire() && !sfence.valid && !satp.changed
+  //PTW gives a response on a request and asserts the "refill" signal
+  val refill = ptw.resp.fire() && !sfence.valid && !satp.changed  //Fire is true when Valid is Asserted
+
+  //The Super/Normal TLB write the response as soon as the PTW response is valid
   normalPage.w_apply(
     valid = { if (q.normalAsVictim) false.B
     else refill && ptw.resp.bits.entry.level.get === 2.U },
@@ -238,12 +275,14 @@ class TLB(Width: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModul
     data_replenish = io.ptw_replenish
   )
 
+  //In case of a miss, the PTW is sent a request to get the PPN using VPN.
+
   // if sameCycle, just req.valid
   // if !sameCycle, add one more RegNext based on !sameCycle's RegNext 
   // because sram is too slow and dtlb is too distant from dtlbRepeater
-  for (i <- 0 until Width) {
-    io.ptw.req(i).valid :=  need_RegNextInit(!q.sameCycle, validRegVec(i) && missVec(i), false.B) && 
-      !RegNext(refill, init = false.B) &&
+  for (i <- 0 until Width) {  //Requests to PTW are two cycles delayed
+    io.ptw.req(i).valid :=  need_RegNextInit(!q.sameCycle, validRegVec(i) && missVec(i), false.B) &&  //Send to PTW only when TLB misses on a Valid Request 
+      !RegNext(refill, init = false.B) && //!Don't send to PTW if the previous request is not served yet
       param_choose(!q.sameCycle, !RegNext(RegNext(refill, init = false.B), init = false.B), true.B)
     io.ptw.req(i).bits.vpn := need_RegNext(!q.sameCycle, need_RegNext(!q.sameCycle, reqAddr(i).vpn))
   }

@@ -45,7 +45,7 @@ class TLBFA(
   for (i <- 0 until ports) {
     val req = io.r.req(i)
     val resp = io.r.resp(i)
-    val access = io.access(i)
+    val access = io.access(i) //Replacement related
 
     val vpn = req.bits.vpn
     val vpn_reg = if (sameCycle) vpn else RegEnable(vpn, req.fire())

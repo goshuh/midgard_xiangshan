@@ -96,7 +96,7 @@ class PTW()(implicit p: Parameters) extends XSModule with HasPtwConst with HasPe
       when (io.req.fire()) {
         val req = io.req.bits
         state := s_addr_check
-        level := Mux(req.l1Hit, 1.U, 0.U)
+        level := Mux(req.l1Hit, 1.U, 0.U) //If L1 PTW Cache hits, the level is 1 else 0
         af_level := Mux(req.l1Hit, 1.U, 0.U)
         ppn := Mux(req.l1Hit, io.req.bits.ppn, satp.ppn)
         vpn := io.req.bits.req_info.vpn

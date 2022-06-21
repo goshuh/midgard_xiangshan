@@ -191,17 +191,17 @@ trait HasCSRConst {
   val Dscratch      = 0x7B2
   val Dscratch1     = 0x7B3
 
-  def privEcall  = 0x000.U
-  def privEbreak = 0x001.U
-  def privMret   = 0x302.U
-  def privSret   = 0x102.U
+  def privEcall  = 0x000.U  //ECALL: Transfers the control to the OS
+  def privEbreak = 0x001.U  //Enter Debug Mode
+  def privMret   = 0x302.U  //Trap Return Instructions
+  def privSret   = 0x102.U  //?Why no instruction for Hypervisor?
   def privUret   = 0x002.U
   def privDret   = 0x7b2.U
 
-  def ModeM     = 0x3.U
-  def ModeH     = 0x2.U
-  def ModeS     = 0x1.U
-  def ModeU     = 0x0.U
+  def ModeM     = 0x3.U //  Machine Mode
+  def ModeH     = 0x2.U //  Hypervisor Mode
+  def ModeS     = 0x1.U //  Supervisor Mode
+  def ModeU     = 0x0.U //  User Mode
 
   def IRQ_UEIP  = 0
   def IRQ_SEIP  = 1
