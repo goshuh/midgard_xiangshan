@@ -56,38 +56,43 @@ class MidgardFSVLBWrapper(Width: Int, q: TLBParameters, P: Param)(implicit p: Pa
 
   val ifecth = if (q.fetchi) true.B else false.B
 
-  val vmEnable = if (EnbaleTlbDebug) (csr.satp.mode === 8.U)
-  else (csr.satp.mode === 8.U && (mode < ModeM))
+  val vmEnable = if (EnbaleTlbDebug) (csr.satp.mode === 15.U)
+  else (csr.satp.mode === 15.U && (mode < ModeM))
 
   //Connecting Wrapper IO to the VLB
   (0 until Width).map{i => 
     val addressOffset = io.requestor(i).req.bits.vaddr(offLen, 0)
+    val cmd = io.requestor(i).req.bits.cmd  //Command that tries to access the TLB
+    
+    val cmdReg = if (!q.sameCycle) RegNext(cmd) else cmd  //Command: Request for Read, Write, Execute, Atomic Read, Atomic Write
+    val validReg = if (!q.sameCycle) RegNext(io.requestor(i).req.valid) else io.requestor(i).req.valid  //Valid Request or not
+    
+    
     //Request Channel
     VLBReq(i).bits.vpn := io.requestor(i).req.bits.vaddr(VAddrBits - 1, offLen)
     VLBReq(i).bits.idx := DontCare
     VLBReq(i).bits.kill := kill
-    VLBReq(i).valid := io.requestor(i).req.valid
+    VLBReq(i).valid := io.requestor(i).req.valid & vmEnable
     io.requestor(i).req.ready := true.B
 
     val excp = io.requestor(i).resp.bits.excp
 
     //Response Channel
-    io.requestor(i).resp.bits.paddr := Mux(vmEnable, VLBResp(i).bits.mpn ## addressOffset, io.requestor(i).req.bits.vaddr)
+    val vaddr = io.requestor(i).req.bits.vaddr
+    io.requestor(i).resp.bits.paddr := Mux(vmEnable, VLBResp(i).bits.mpn ## addressOffset, if (!q.sameCycle) RegNext(vaddr) else vaddr)
     io.requestor(i).resp.bits.miss := !VLBResp(i).bits.vld & vmEnable
     io.requestor(i).resp.bits.fast_miss := !VLBResp(i).bits.vld & vmEnable  //Sent to Ld unit
     io.requestor(i).resp.bits.excp := excp  //TODO: AF
-    io.requestor(i).resp.bits.ptwBack := DontCare
-    io.requestor(i).resp.valid := VLBResp(i).valid
+    io.requestor(i).resp.bits.ptwBack := false.B
+    io.requestor(i).resp.valid := Mux(vmEnable, VLBResp(i).valid, validReg)  //Bypass VLB Request to Response in case of Machine Mode
 
     //Generating Exception Signals
 
-    val VLBAttribute = VLBResp(i).bits.attr //Encapsulates Permissions
-    val cmd = io.requestor(i).req.bits.cmd  //Command that tries to access the TLB
+    val VLBAttribute = VLBResp(i).bits.attr //Encaps`ulates Permissions
     val perm = Wire(new TlbPermBundle())  //Permissions of the VLB Entry
     val pf = perm.pf
     val af = perm.af
-    val cmdReg = if (!q.sameCycle) RegNext(cmd) else cmd  //Command: Request for Read, Write, Execute, Atomic Read, Atomic Write
-
+    
     //Need to include Cachable bit 
     perm.pf := VLBAttribute(0)
     perm.af := VLBAttribute(1)
@@ -100,8 +105,13 @@ class MidgardFSVLBWrapper(Width: Int, q: TLBParameters, P: Param)(implicit p: Pa
     perm.r := VLBAttribute(8)
     perm.pm := DontCare
 
-    io.requestor(i).resp.bits.static_pm.valid := VLBResp(i).valid && VLBResp(i).bits.vld & vmEnable
-    io.requestor(i).resp.bits.static_pm.bits  := VLBAttribute(9)    //MMIO/Non-Cachable
+    //Address Range < 0x80000000 goes directly to the MMIO and not to the I/D Cache
+    //Without this, the addresses < 0x80000000, if requested by the d-cache are requested to be cached if VM is not enabled.
+    //The DCache is not supposed to work on these addresses and an assertion in the DCache fails.
+    //Hence we do the checking for cacheablility here based on the address range and hardcode the static_pm bits.
+    val isNonCachableAddress = io.requestor(i).resp.bits.paddr < 0x80000000L.U
+    io.requestor(i).resp.bits.static_pm.valid := Mux(isNonCachableAddress,io.requestor(i).resp.valid, VLBResp(i).valid && VLBResp(i).bits.vld & vmEnable)
+    io.requestor(i).resp.bits.static_pm.bits  := Mux(isNonCachableAddress, true.B, VLBAttribute(9))    //MMIO/Non-Cachable
 
     //Permission Checks
     val ldUpdate = !perm.a && TlbCmd.isRead(cmdReg) && !TlbCmd.isAmo(cmdReg) //update A/D through exception

@@ -56,7 +56,7 @@ class MidgardFSPTWWrapper(Width: Int, P: Param)(implicit p: Parameters) extends 
     val memRead =  edge.Get(
     fromSource = 0.U,
     // toAddress  = memAddr(log2Up(CacheLineSize / 2 / 8) - 1, 0),
-    toAddress  = blockBytes_align(MidgardFSPTW_i.mem_req_o.bits.mcn(41, 6)),  //Confirm if address alignment is correct or not
+    toAddress  = blockBytes_align(MidgardFSPTW_i.mem_req_o.bits.mcn ## 0.U(6.W)),  //Confirm if address alignment is correct or not
     lgSize     = log2Up(l2tlbParams.blockBytes).U
   )._2
 
