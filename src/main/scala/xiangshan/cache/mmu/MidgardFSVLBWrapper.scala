@@ -28,7 +28,14 @@ class MidgardFSVLBWrapper(Width: Int, q: TLBParameters, P: Param)(implicit p: Pa
   */
   val io = IO(new VlbIO(Width, q, P))  //Width is the number of ports in the TLB
 
-//   require(q.sameCycle == q.missSameCycle)
+  require(!(q.sameCycle && !q.missSameCycle))
+
+  // 1.  missSameCycle &&  sameCycle ->  tlbEn, hit/miss -> outer, addr/perm -> outer
+  // 2.  missSameCycle && !sameCycle ->  tlbEn, hit/miss -> outer, addr/perm -> flop -> outer
+  // 3. !missSameCycle &&  sameCycle ->  nonsense
+  // 4. !missSameCycle && !sameCycle -> !tlbEn, hit/miss -> flop -> outer, addr/perm -> flop -> outer
+  //     1) req -> flop -> vlb
+  //     2) vlb -> resp -> flop (y)
 
   val MidgardFSVLB = Module(new VLB(N = Width, P = P.copy(tlbEn = q.missSameCycle)))
 //   val MidgardFSVLB = Module(new VLB(N = Width, P = P))
@@ -36,6 +43,7 @@ class MidgardFSVLBWrapper(Width: Int, q: TLBParameters, P: Param)(implicit p: Pa
   //VLB Interface
   val VLBReq = MidgardFSVLB.vlb_req_i
   val VLBResp = MidgardFSVLB.vlb_resp_o
+  val VLBFill = MidgardFSVLB.vlb_fill_o
   //PTW Interface
   val PTWReq = MidgardFSVLB.ptw_req_o
   val PTWResp = MidgardFSVLB.ptw_resp_i
@@ -59,15 +67,18 @@ class MidgardFSVLBWrapper(Width: Int, q: TLBParameters, P: Param)(implicit p: Pa
   val vmEnable = if (EnbaleTlbDebug) (csr.satp.mode === 15.U)
   else (csr.satp.mode === 15.U && (mode < ModeM))
 
+  //Creating buffer for unmapped requests:
+  val unmappedReq = Reg(Valid(new VLBReq (P)))  //Vector To store unmapped entries
+  when(VLBFill.valid && !VLBFill.bits.vld){
+    unmappedReq.valid := true.B
+    unmappedReq.bits  := PTWReq.bits
+  }
+
   //Connecting Wrapper IO to the VLB
   (0 until Width).map{i => 
-    val addressOffset = io.requestor(i).req.bits.vaddr(offLen, 0)
+    val addressOffset = io.requestor(i).req.bits.vaddr(offLen - 1, 0)
     val cmd = io.requestor(i).req.bits.cmd  //Command that tries to access the TLB
-    
-    val cmdReg = if (!q.sameCycle) RegNext(cmd) else cmd  //Command: Request for Read, Write, Execute, Atomic Read, Atomic Write
-    val validReg = if (!q.sameCycle) RegNext(io.requestor(i).req.valid) else io.requestor(i).req.valid  //Valid Request or not
-    
-    
+
     //Request Channel
     VLBReq(i).bits.vpn := io.requestor(i).req.bits.vaddr(VAddrBits - 1, offLen)
     VLBReq(i).bits.idx := DontCare
@@ -77,14 +88,18 @@ class MidgardFSVLBWrapper(Width: Int, q: TLBParameters, P: Param)(implicit p: Pa
 
     val excp = io.requestor(i).resp.bits.excp
 
+    val hitUnmappedReq = unmappedReq.valid && unmappedReq.bits.vpn === VLBReq(i).bits.vpn
+
     //Response Channel
+    val valid = io.requestor(i).req.valid
     val vaddr = io.requestor(i).req.bits.vaddr
-    io.requestor(i).resp.bits.paddr := Mux(vmEnable, VLBResp(i).bits.mpn ## addressOffset, if (!q.sameCycle) RegNext(vaddr) else vaddr)
-    io.requestor(i).resp.bits.miss := !VLBResp(i).bits.vld & vmEnable
-    io.requestor(i).resp.bits.fast_miss := !VLBResp(i).bits.vld & vmEnable  //Sent to Ld unit
-    io.requestor(i).resp.bits.excp := excp  //TODO: AF
+    //unmapped scheduling may be wrong
+    io.requestor(i).resp.bits.paddr := Mux(vmEnable, Mux(hitUnmappedReq, unmappedReq.bits.vpn ## addressOffset, VLBResp(i).bits.mpn ## (if(!q.missSameCycle) RegNext(addressOffset) else addressOffset)), if(!q.missSameCycle) RegNext(vaddr) else vaddr)
+    io.requestor(i).resp.bits.miss := (!hitUnmappedReq && !VLBResp(i).bits.vld) & vmEnable
+    io.requestor(i).resp.bits.fast_miss := (!hitUnmappedReq && !VLBResp(i).bits.vld) & vmEnable  //Sent to Ld unit
+    io.requestor(i).resp.bits.excp := Mux(vmEnable, excp, RegNext(excp))  //TODO: AF
     io.requestor(i).resp.bits.ptwBack := false.B
-    io.requestor(i).resp.valid := Mux(vmEnable, VLBResp(i).valid, validReg)  //Bypass VLB Request to Response in case of Machine Mode
+    io.requestor(i).resp.valid := Mux(vmEnable, Mux(hitUnmappedReq, true.B, VLBResp(i).valid), if(!q.missSameCycle) RegNext(valid) else valid)  //Bypass VLB Request to Response in case of Machine Mode
 
     //Generating Exception Signals
 
@@ -111,30 +126,34 @@ class MidgardFSVLBWrapper(Width: Int, q: TLBParameters, P: Param)(implicit p: Pa
     //Hence we do the checking for cacheablility here based on the address range and hardcode the static_pm bits.
     val isNonCachableAddress = io.requestor(i).resp.bits.paddr < 0x80000000L.U
     io.requestor(i).resp.bits.static_pm.valid := Mux(isNonCachableAddress,io.requestor(i).resp.valid, VLBResp(i).valid && VLBResp(i).bits.vld & vmEnable)
-    io.requestor(i).resp.bits.static_pm.bits  := Mux(isNonCachableAddress, true.B, VLBAttribute(9))    //MMIO/Non-Cachable
+    io.requestor(i).resp.bits.static_pm.bits  := Mux(isNonCachableAddress, true.B, !VLBAttribute(9))    //MMIO/Non-Cachable
 
     //Permission Checks
-    val ldUpdate = !perm.a && TlbCmd.isRead(cmdReg) && !TlbCmd.isAmo(cmdReg) //update A/D through exception
-    val stUpdate = (!perm.a || !perm.d) && (TlbCmd.isWrite(cmdReg) || TlbCmd.isAmo(cmdReg)) // update A/D through exception
-    val instrUpdate = !perm.a && TlbCmd.isExec(cmdReg) // update A/D through exception
+    val ldUpdate = !perm.a && TlbCmd.isRead(cmd) && !TlbCmd.isAmo(cmd) //update A/D through exception
+    val stUpdate = (!perm.a || !perm.d) && (TlbCmd.isWrite(cmd) || TlbCmd.isAmo(cmd)) // update A/D through exception
+    val instrUpdate = !perm.a && TlbCmd.isExec(cmd) // update A/D through exception
     val modeCheck = !(mode === ModeU && !perm.u || mode === ModeS && perm.u && (!priv.sum || ifecth)) //Fail
     val ldPermFail = !(modeCheck && (perm.r || priv.mxr && perm.x))
     val stPermFail = !(modeCheck && perm.w)
     val instrPermFail = !(modeCheck && perm.x)  //Instruction Permission Pass if Mode is correct and has execute permission
-    val ldPf = (ldPermFail || pf) && (TlbCmd.isRead(cmdReg) && !TlbCmd.isAmo(cmdReg))
-    val stPf = (stPermFail || pf) && (TlbCmd.isWrite(cmdReg) || TlbCmd.isAmo(cmdReg))
-    val instrPf = (instrPermFail || pf) && TlbCmd.isExec(cmdReg)
+    val ldPf = (ldPermFail || pf) && (TlbCmd.isRead(cmd) && !TlbCmd.isAmo(cmd))
+    val stPf = (stPermFail || pf) && (TlbCmd.isWrite(cmd) || TlbCmd.isAmo(cmd))
+    val instrPf = (instrPermFail || pf) && TlbCmd.isExec(cmd)
 
     //Generating Page Fault
-    excp.pf.ld := (ldPf || ldUpdate) && !af & vmEnable //This will be created only for Data TLB
-    excp.pf.st := (stPf || stUpdate) && !af & vmEnable //This will be created only for Data TLB
-    excp.pf.instr := (instrPf || instrUpdate) && !af & vmEnable  //This will be created only for Instruction TLB
+    excp.pf.ld := (hitUnmappedReq || (ldPf || ldUpdate) && !af) && vmEnable //This will be created only for Data TLB
+    excp.pf.st := (hitUnmappedReq || (stPf || stUpdate) && !af) && vmEnable //This will be created only for Data TLB
+    excp.pf.instr := (hitUnmappedReq || (instrPf || instrUpdate) && !af) && vmEnable  //This will be created only for Instruction TLB
 
     //TODO: Generating Access Fault
     excp.af.instr := false.B
     excp.af.ld := false.B
     excp.af.st := false.B
   }
+
+  // when(wrong) {
+  //   unmappedReq.valid := false.B
+  // }
 
   // val ptw_resp = Wire(Decoupled(new VMA(P)))
 
@@ -165,34 +184,18 @@ object MidgardFSVLBWrapper {
     tlb.io.csr <> csr
     tlb.suggestName(s"Vlb_${q.name}")
 
-    if (!shouldBlock) { // dtlb
-      for (i <- 0 until width) {
-        tlb.io.requestor(i) <> in(i)
-        // tlb.io.requestor(i).req.valid := in(i).req.valid
-        // tlb.io.requestor(i).req.bits := in(i).req.bits
-        // in(i).req.ready := tlb.io.requestor(i).req.ready
+    for (i <- 0 until width) {
+      tlb.io.requestor(i) <> in(i)
 
-        // in(i).resp.valid := tlb.io.requestor(i).resp.valid
-        // in(i).resp.bits := tlb.io.requestor(i).resp.bits
-        // tlb.io.requestor(i).resp.ready := in(i).resp.ready
+      if (q.missSameCycle && !q.sameCycle) {  //ITLB
+        in(i).resp.bits           := RegNext(tlb.io.requestor(i).resp.bits)
+        in(i).resp.valid          := RegNext(tlb.io.requestor(i).resp.valid)
+        in(i).resp.bits.miss      := tlb.io.requestor(i).resp.bits.miss
+        in(i).resp.bits.fast_miss := tlb.io.requestor(i).resp.bits.fast_miss
       }
-    } else { // itlb
-      //require(width == 1)
-      (0 until width).map{ i =>
-        tlb.io.requestor(i).req.valid := in(i).req.valid
-        tlb.io.requestor(i).req.bits := in(i).req.bits
-        in(i).req.ready := !tlb.io.requestor(i).resp.bits.miss && in(i).resp.ready && tlb.io.requestor(i).req.ready
 
-        require(q.missSameCycle || q.sameCycle)
-        // NOTE: the resp.valid seems to be useless, it must be true when need
-        //       But don't know what happens when true but not need, so keep it correct value, not just true.B
-        if (q.missSameCycle && !q.sameCycle) {
-          in(i).resp.valid := tlb.io.requestor(i).resp.valid && !RegNext(tlb.io.requestor(i).resp.bits.miss)
-        } else {
-          in(i).resp.valid := tlb.io.requestor(i).resp.valid && !tlb.io.requestor(i).resp.bits.miss
-        }
-        in(i).resp.bits := tlb.io.requestor(i).resp.bits
-        tlb.io.requestor(i).resp.ready := in(i).resp.ready
+      if (shouldBlock) {  //ITLB
+        in(i).req.ready := !tlb.io.requestor(i).resp.bits.miss && in(i).resp.ready && tlb.io.requestor(i).req.ready
       }
     }
     tlb.io.ptw
