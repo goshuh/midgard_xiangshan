@@ -552,6 +552,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
       val difftest = Module(new DifftestSbufferEvent)
       val dcache_resp_id = resp.bits.id
       difftest.io.clock := clock
+      difftest.io.reset := reset
       difftest.io.coreid := io.hartId
       difftest.io.index := index.U
       difftest.io.sbufferResp := RegNext(resp.fire())

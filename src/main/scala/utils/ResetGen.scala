@@ -24,7 +24,7 @@ class ResetGen extends Module {
     val out = Output(Bool())
   })
 
-  io.out := RegNext(RegNext(reset.asBool))
+  io.out := RegNext(RegNext(reset.asBool, true.B), true.B)
 }
 
 trait ResetNode
@@ -42,7 +42,7 @@ object ResetGen {
           mod.reset := reset
         case ResetGenNode(children) =>
           val next_rst = Wire(Bool())
-          withReset(reset){
+          withReset(reset.asAsyncReset) {
             val resetGen = Module(new ResetGen)
             next_rst := resetGen.io.out
           }
@@ -56,7 +56,7 @@ object ResetGen {
     resetReg.foreach(_ := reset)
     for ((resetLevel, i) <- resetChain.zipWithIndex) {
       if (!sim) {
-        withReset(resetReg(i)) {
+        withReset(resetReg(i).asAsyncReset) {
           val resetGen = Module(new ResetGen)
           resetReg(i + 1) := resetGen.io.out
         }

@@ -24,6 +24,7 @@ import xiangshan._
 import xiangshan.backend.fu.{PFEvent, PMP, PMPChecker,PMPReqBundle}
 import xiangshan.cache.mmu._
 import xiangshan.frontend.icache._
+import system._
 
 
 class Frontend()(implicit p: Parameters) extends LazyModule with HasXSParameter{
@@ -44,6 +45,7 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
     val reset_vector = Input(UInt(PAddrBits.W))
     val fencei = Input(Bool())
     val ptw = new VectorTlbPtwIO(4)
+    val ptw_mg = new MidgardFSPTWIO(p(MidgardKey))
     val backend = new FrontendToCtrlIO
     val sfence = Input(new SfenceBundle)
     val tlbCsr = Input(new TlbCsrBundle)
@@ -95,20 +97,37 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   for (i <- pmp_check.indices) {
     pmp_check(i).apply(tlbCsr.priv.imode, pmp.io.pmp, pmp.io.pma, pmp_req_vec(i))
   }
-  icache.io.pmp(0).resp <> pmp_check(0).resp
-  icache.io.pmp(1).resp <> pmp_check(1).resp
-  icache.io.pmp(2).resp <> pmp_check(2).resp
-  ifu.io.pmp.resp <> pmp_check(3).resp
 
   val itlb = Module(new TLB(4, Seq(true, true, false, true), itlbParams))
-  itlb.io.requestor.take(3) zip icache.io.itlb foreach {case (a,b) => a <> b}
-  itlb.io.requestor(3) <> ifu.io.iTLBInter // mmio may need re-tlb, blocked
   itlb.io.base_connect(io.sfence, tlbCsr)
   io.ptw.connect(itlb.io.ptw)
   itlb.io.ptw_replenish <> DontCare
   itlb.io.flushPipe.map(_ := needFlush)
 
   icache.io.prefetch <> ftq.io.toPrefetch
+
+  // midgard
+  val ivlb = Module(new MidgardFSVLBWrapper(4, p(MidgardKey)))
+
+  ivlb.sfence_i := io.sfence
+  ivlb.csr_i    := tlbCsr
+  ivlb.flush_i  := Fill(4, needFlush)
+
+  ivlb.tlb_o    <> itlb.io.requestor
+  ivlb.pmp_i    <> VecInit(pmp_check.map(_.resp))
+
+  icache.io.itlb(0)     <> ivlb.tlb_i(0)
+  icache.io.itlb(1)     <> ivlb.tlb_i(1)
+  icache.io.itlb(2)     <> ivlb.tlb_i(2)
+  ifu.io.iTLBInter      <> ivlb.tlb_i(3)
+
+  icache.io.pmp(0).resp <> ivlb.pmp_o(0)
+  icache.io.pmp(1).resp <> ivlb.pmp_o(1)
+  icache.io.pmp(2).resp <> ivlb.pmp_o(2)
+  ifu.io.pmp.resp       <> ivlb.pmp_o(3)
+
+  io.ptw_mg.ptw_req_o   <> ivlb.ptw_req_o
+  io.ptw_mg.ptw_resp_i  <> ivlb.ptw_resp_i
 
 
   //IFU-Ftq

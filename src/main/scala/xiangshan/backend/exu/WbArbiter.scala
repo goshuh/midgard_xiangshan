@@ -305,6 +305,7 @@ class WbArbiterWrapper(
       intArbiter.module.io.out.foreach(out => {
         val difftest = Module(new DifftestIntWriteback)
         difftest.io.clock := clock
+        difftest.io.reset := reset
         difftest.io.coreid := io.hartId
         difftest.io.valid := out.valid && out.bits.uop.ctrl.rfWen
         difftest.io.dest := out.bits.uop.pdest
@@ -326,6 +327,7 @@ class WbArbiterWrapper(
       fpArbiter.module.io.out.foreach(out => {
         val difftest = Module(new DifftestFpWriteback)
         difftest.io.clock := clock
+        difftest.io.reset := reset
         difftest.io.coreid := io.hartId
         difftest.io.valid := out.valid // all fp instr will write fp rf
         difftest.io.dest := out.bits.uop.pdest

@@ -27,8 +27,9 @@ import xiangshan.backend.exu.StdExeUnit
 import xiangshan.backend.fu._
 import xiangshan.backend.rob.RobLsqIO
 import xiangshan.cache._
-import xiangshan.cache.mmu.{VectorTlbPtwIO, TLBNonBlock, TlbReplace}
+import xiangshan.cache.mmu.{VectorTlbPtwIO, TLBNonBlock, TlbReplace, MidgardFSPTWIO, MidgardFSVLBWrapper}
 import xiangshan.mem._
+import system._
 
 class Std(implicit p: Parameters) extends FunctionUnit {
   io.in.ready := true.B
@@ -77,6 +78,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
     val ptw = new VectorTlbPtwIO(exuParameters.LduCnt + exuParameters.StuCnt)
+    val ptw_mg = new MidgardFSPTWIO(p(MidgardKey))
     val sfence = Input(new SfenceBundle)
     val tlbCsr = Input(new TlbCsrBundle)
     val fenceToSbuffer = Flipped(new FenceToSbuffer)
@@ -235,6 +237,19 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     Cat(io.ptw.resp.bits.data.entry.ppn, 0.U(12.W)).asUInt)
   dtlb.map(_.ptw_replenish := pmp_check_ptw.io.resp)
 
+  // midgard
+  val dvlb = Module(new MidgardFSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, p(MidgardKey)))
+
+  dvlb.sfence_i := sfence
+  dvlb.csr_i    := tlbcsr
+  dvlb.flush_i  := 0.U
+
+  dvlb.tlb_o    <> VecInit(dtlb_reqs)
+  dvlb.pmp_i    <> VecInit(pmp_check.map(_.resp))
+
+  io.ptw_mg.ptw_req_o  <> dvlb.ptw_req_o
+  io.ptw_mg.ptw_resp_i <> dvlb.ptw_resp_i
+
   val tdata = RegInit(VecInit(Seq.fill(6)(0.U.asTypeOf(new MatchTriggerIO))))
   val tEnable = RegInit(VecInit(Seq.fill(6)(false.B)))
   val en = csrCtrl.trigger_enable
@@ -270,9 +285,9 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     // dcache refill req
     loadUnits(i).io.refill           <> delayedDcacheRefill
     // dtlb
-    loadUnits(i).io.tlb <> dtlb_reqs.take(exuParameters.LduCnt)(i)
+    loadUnits(i).io.tlb <> dvlb.tlb_i(i)
     // pmp
-    loadUnits(i).io.pmp <> pmp_check(i).resp
+    loadUnits(i).io.pmp <> dvlb.pmp_o(i)
 
     // load to load fast forward: load(i) prefers data(i)
     val fastPriority = (i until exuParameters.LduCnt) ++ (0 until i)
@@ -356,8 +371,8 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     stu.io.lsq          <> lsq.io.storeIn(i)
     stu.io.lsq_replenish <> lsq.io.storeInRe(i)
     // dtlb
-    stu.io.tlb          <> dtlb_reqs.drop(exuParameters.LduCnt)(i)
-    stu.io.pmp          <> pmp_check(i+exuParameters.LduCnt).resp
+    stu.io.tlb          <> dvlb.tlb_i(exuParameters.LduCnt + i)
+    stu.io.pmp          <> dvlb.pmp_o(exuParameters.LduCnt + i)
 
     // store unit does not need fast feedback
     io.rsfeedback(exuParameters.LduCnt + i).feedbackFast := DontCare
@@ -511,11 +526,11 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   atomicsUnit.io.redirect <> redirect
 
   // TODO: complete amo's pmp support
-  val amoTlb = dtlb_ld(0).requestor(0)
+  val amoTlb = dvlb.tlb_i(0)
   atomicsUnit.io.dtlb.resp.valid := false.B
   atomicsUnit.io.dtlb.resp.bits  := DontCare
   atomicsUnit.io.dtlb.req.ready  := amoTlb.req.ready
-  atomicsUnit.io.pmpResp := pmp_check(0).resp
+  atomicsUnit.io.pmpResp := dvlb.pmp_o(0)
 
   atomicsUnit.io.dcache <> dcache.io.lsu.atomics
   atomicsUnit.io.flush_sbuffer.empty := sbuffer.io.flush.empty

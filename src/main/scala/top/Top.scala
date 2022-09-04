@@ -49,6 +49,7 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
     Resource(ResourceAnchors.root, "width").bind(width)
     Resource(ResourceAnchors.soc, "width").bind(width)
     Resource(ResourceAnchors.cpus, "width").bind(ResourceInt(1))
+    Resource(ResourceAnchors.cpus, "hertz").bind(ResourceInt(1000000))
     def bindManagers(xbar: TLNexusNode) = {
       ManagerUnification(xbar.edges.in.head.manager.managers).foreach{ manager =>
         manager.resources.foreach(r => r.bind(manager.toResource))
@@ -56,6 +57,18 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
     }
     bindManagers(misc.l3_xbar.asInstanceOf[TLNexusNode])
     bindManagers(misc.peripheralXbar.asInstanceOf[TLNexusNode])
+
+    val chosen = new Device {
+      def describe(resources: ResourceBindings): Description = {
+        Description("chosen", Map(
+          "bootargs"    -> resources("args").map(_.value),
+          "stdout-path" -> resources("sout").map(_.value)
+        ))
+      }
+    }
+
+    Resource(chosen, "args").bind(ResourceString("earlycon console=ttyUL0"))
+    Resource(chosen, "sout").bind(ResourceAlias(misc.uartDevice.label))
   }
 
   println(s"FPGASoC cores: $NumCores banks: $L3NBanks block size: $L3BlockSize bus size: $L3OuterBusWidth")

@@ -111,7 +111,7 @@ trait HasXSDts {
       7,    // mtip  [clint]
       11,   // meip  [plic]
       9,    // seip  [plic]
-      65535 // debug [debug]
+      12    // debug [debug]
     )
     assert(int_resources.size == int_ids.size)
     for((resources, id) <- int_resources.zip(int_ids)){

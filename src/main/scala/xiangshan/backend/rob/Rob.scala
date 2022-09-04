@@ -1020,6 +1020,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     for (i <- 0 until CommitWidth) {
       val difftest = Module(new DifftestInstrCommit)
       difftest.io.clock    := clock
+      difftest.io.reset    := reset
       difftest.io.coreid   := io.hartId
       difftest.io.index    := i.U
 
@@ -1078,6 +1079,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
 
       val difftest = Module(new DifftestBasicInstrCommit)
       difftest.io.clock   := clock
+      difftest.io.reset   := reset
       difftest.io.coreid  := io.hartId
       difftest.io.index   := i.U
       difftest.io.valid   := RegNext(RegNext(RegNext(io.commits.commitValid(i) && io.commits.isCommit)))
@@ -1095,6 +1097,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     for (i <- 0 until CommitWidth) {
       val difftest = Module(new DifftestLoadEvent)
       difftest.io.clock  := clock
+      difftest.io.reset  := reset
       difftest.io.coreid := io.hartId
       difftest.io.index  := i.U
 
@@ -1122,6 +1125,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     val trapPC = SignExt(PriorityMux(wpc.zip(trapVec).map(x => x._2 ->x._1)), XLEN)
     val difftest = Module(new DifftestTrapEvent)
     difftest.io.clock    := clock
+    difftest.io.reset    := reset
     difftest.io.coreid   := io.hartId
     difftest.io.valid    := hitTrap
     difftest.io.code     := trapCode
@@ -1141,6 +1145,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     val hitTrap = trapVec.reduce(_||_)
     val difftest = Module(new DifftestBasicTrapEvent)
     difftest.io.clock    := clock
+    difftest.io.reset    := reset
     difftest.io.coreid   := io.hartId
     difftest.io.valid    := hitTrap
     difftest.io.cycleCnt := timer

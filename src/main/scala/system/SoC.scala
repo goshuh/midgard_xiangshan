@@ -32,8 +32,10 @@ import top.BusPerfMonitor
 import xiangshan.backend.fu.PMAConst
 import huancun._
 import huancun.debug.TLLogger
+import freechips.rocketchip.diplomacy.{Resource, ResourceBinding, ResourceInt, Binding}
 
 case object SoCParamsKey extends Field[SoCParameters]
+case object MidgardKey   extends Field[midgard.Param]
 
 case class SoCParameters
 (
@@ -84,6 +86,9 @@ abstract class BaseSoC()(implicit p: Parameters) extends LazyModule with HasSoCP
   val peripheralXbar = TLXbar()
   val l3_xbar = TLXbar()
   val l3_banked_xbar = TLXbar()
+
+  val clint: CLINT
+  val plic:  TLPLIC
 }
 
 // We adapt the following three traits from rocket-chip.
@@ -128,8 +133,7 @@ trait HaveSlaveAXI4Port {
 trait HaveAXI4MemPort {
   this: BaseSoC =>
   val device = new MemoryDevice
-  // 36-bit physical address
-  val memRange = AddressSet(0x00000000L, 0xfffffffffL).subtract(AddressSet(0x0L, 0x7fffffffL))
+  val memRange = AddressSet(0x00000000L, (1L << soc.PAddrBits) - 1L).subtract(AddressSet(0x0L, 0x7fffffffL))
   val memAXI4SlaveNode = AXI4SlaveNode(Seq(
     AXI4SlavePortParameters(
       slaves = Seq(
@@ -181,7 +185,7 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
   // on-chip devices: 0x3800_0000 - 0x3fff_ffff 0x0000_0000 - 0x0000_0fff
   val onChipPeripheralRange = AddressSet(0x38000000L, 0x07ffffffL)
   val uartRange = AddressSet(0x40600000, 0xf)
-  val uartDevice = new SimpleDevice("serial", Seq("xilinx,uartlite"))
+  val uartDevice = new SimpleDevice("serial", Seq("xlnx,xps-uartlite-1.00.a"))
   val uartParams = AXI4SlaveParameters(
     address = Seq(uartRange),
     regionType = RegionType.UNCACHED,
@@ -189,9 +193,27 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
     supportsWrite = TransferSizes(1, 8),
     resources = uartDevice.reg
   )
+
+  // midgard bsmmu
+  val bmmuRange  = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
+  val bmmuDevice = new SimpleDevice("bmmu", Seq("midgard.bmmu"))
+  val bmmuParams = AXI4SlaveParameters(
+    address       = Seq(bmmuRange),
+    regionType    = RegionType.UNCACHED,
+    supportsRead  = TransferSizes(1, 8),
+    supportsWrite = TransferSizes(1, 8),
+    resources     = bmmuDevice.reg
+  )
+
+  // add interrupts
+  ResourceBinding {
+    uartDevice.int.head.bind(this.plic.device, ResourceInt(1))
+    bmmuDevice.int.head.bind(this.plic.device, ResourceInt(2))
+  }
+
   val peripheralRange = AddressSet(
     0x0, 0x7fffffff
-  ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange))
+  ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange)).flatMap(_.subtract(bmmuRange))
   val peripheralNode = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
     Seq(AXI4SlaveParameters(
       address = peripheralRange,
@@ -199,7 +221,7 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
       supportsRead = TransferSizes(1, 8),
       supportsWrite = TransferSizes(1, 8),
       interleavedId = Some(0)
-    ), uartParams),
+    ), uartParams, bmmuParams),
     beatBytes = 8
   )))
 

@@ -23,13 +23,14 @@ import chisel3.util._
 import freechips.rocketchip.diplomacy.{BundleBridgeSource, LazyModule, LazyModuleImp}
 import freechips.rocketchip.interrupts.{IntSinkNode, IntSinkPortSimple}
 import freechips.rocketchip.tile.HasFPUParameters
-import freechips.rocketchip.tilelink.TLBuffer
+import freechips.rocketchip.tilelink.{TLBuffer, TLXbar, TLWidthWidget}
 import system.HasSoCParameter
 import utils._
 import xiangshan.backend._
 import xiangshan.backend.exu.{ExuConfig, Wb2Ctrl, WbArbiterWrapper}
 import xiangshan.cache.mmu._
 import xiangshan.frontend._
+import system._
 
 import scala.collection.mutable.ListBuffer
 
@@ -139,10 +140,15 @@ abstract class XSCoreBase()(implicit p: config.Parameters) extends LazyModule
   // outer facing nodes
   val frontend = LazyModule(new Frontend())
   val ptw = LazyModule(new L2TLBWrapper())
+  val ptw_mg = LazyModule(new MidgardFSPTWWrapper(2, p(MidgardKey)))
+  val ptw_xbar = LazyModule(new TLXbar())
   val ptw_to_l2_buffer = LazyModule(new TLBuffer)
   val csrOut = BundleBridgeSource(Some(() => new DistributedCSRIO()))
 
-  ptw_to_l2_buffer.node := ptw.node
+  ptw_xbar.node := ptw.node
+  ptw_xbar.node := TLWidthWidget(64) := ptw_mg.node
+
+  ptw_to_l2_buffer.node := ptw_xbar.node
 
   val wbArbiter = LazyModule(new WbArbiterWrapper(exuConfigs, NRIntWritePorts, NRFpWritePorts))
   val intWbPorts = wbArbiter.intWbPorts
@@ -255,6 +261,8 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   val wb2Ctrl = outer.wb2Ctrl.module
   val memBlock = outer.memBlock.module
   val ptw = outer.ptw.module
+  val ptw_mg = outer.ptw_mg.module
+  val ptw_xbar = outer.ptw_xbar.module
   val ptw_to_l2_buffer = outer.ptw_to_l2_buffer.module
   val exuBlocks = outer.exuBlocks.map(_.module)
 
@@ -412,6 +420,12 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   ptw.io.csr.tlb <> csrioIn.tlb
   ptw.io.csr.distribute_csr <> csrioIn.customCtrl.distribute_csr
 
+  // midgard
+  ptw_mg.satp_i   := csrioIn.tlb.satp.ppn ## 0.U(6.W)
+
+  ptw_mg.vlb_i(0) <> frontend.io.ptw_mg
+  ptw_mg.vlb_i(1) <> memBlock.io.ptw_mg
+
   // if l2 prefetcher use stream prefetch, it should be placed in XSCore
   io.l2_pf_enable := csrioIn.customCtrl.l2_pf_enable
 
@@ -423,6 +437,8 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
         ModuleNode(itlbRepeater2),
         ModuleNode(ptw),
         ModuleNode(dtlbRepeater2),
+        ModuleNode(ptw_mg),
+        ModuleNode(ptw_xbar),
         ModuleNode(ptw_to_l2_buffer),
       )),
       ResetGenNode(Seq(
