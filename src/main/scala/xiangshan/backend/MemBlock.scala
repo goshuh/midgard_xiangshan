@@ -238,14 +238,16 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   dtlb.map(_.ptw_replenish := pmp_check_ptw.io.resp)
 
   // midgard
-  val dvlb = Module(new MidgardFSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, p(MidgardKey)))
+  val dvlb = Module(new MidgardFSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, false, p(MidgardKey)))
 
   dvlb.sfence_i := sfence
   dvlb.csr_i    := tlbcsr
   dvlb.flush_i  := 0.U
 
-  dvlb.tlb_o    <> VecInit(dtlb_reqs)
-  dvlb.pmp_i    <> VecInit(pmp_check.map(_.resp))
+  for (i <- 0 until (exuParameters.LduCnt + exuParameters.StuCnt)) {
+    dvlb.tlb_o(i) <> dtlb_reqs(i)
+    dvlb.pmp_i(i) <> pmp_check(i).resp
+  }
 
   io.ptw_mg.ptw_req_o  <> dvlb.ptw_req_o
   io.ptw_mg.ptw_resp_i <> dvlb.ptw_resp_i
@@ -530,7 +532,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   atomicsUnit.io.dtlb.resp.valid := false.B
   atomicsUnit.io.dtlb.resp.bits  := DontCare
   atomicsUnit.io.dtlb.req.ready  := amoTlb.req.ready
-  atomicsUnit.io.pmpResp := dvlb.pmp_o(0)
+  atomicsUnit.io.pmpResp <> dvlb.pmp_o(0)
 
   atomicsUnit.io.dcache <> dcache.io.lsu.atomics
   atomicsUnit.io.flush_sbuffer.empty := sbuffer.io.flush.empty

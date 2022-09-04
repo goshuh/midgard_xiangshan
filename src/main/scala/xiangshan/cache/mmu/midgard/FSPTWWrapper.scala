@@ -40,10 +40,12 @@ class MidgardFSPTWWrapper(N: Int, P: Param)(implicit p: Parameters) extends Lazy
 
     val u_ptw = Module(new frontside.PTW(P, N))
 
-    u_ptw.satp_i     <> satp_i
+    u_ptw.satp_i <> satp_i
 
-    u_ptw.vlb_req_i  <> VecInit(vlb_i.map(_.ptw_req_o))
-    u_ptw.vlb_resp_o <> VecInit(vlb_i.map(_.ptw_resp_i))
+    for (i <- 0 until N) {
+      u_ptw.vlb_req_i (i) <> vlb_i(i).ptw_req_o
+      u_ptw.vlb_resp_o(i) <> vlb_i(i).ptw_resp_i
+    }
 
 
     //

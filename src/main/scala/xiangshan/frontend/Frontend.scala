@@ -107,14 +107,19 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   icache.io.prefetch <> ftq.io.toPrefetch
 
   // midgard
-  val ivlb = Module(new MidgardFSVLBWrapper(4, p(MidgardKey)))
+  val ivlb = Module(new MidgardFSVLBWrapper(4, true, p(MidgardKey)))
 
   ivlb.sfence_i := io.sfence
   ivlb.csr_i    := tlbCsr
   ivlb.flush_i  := Fill(4, needFlush)
 
-  ivlb.tlb_o    <> itlb.io.requestor
-  ivlb.pmp_i    <> VecInit(pmp_check.map(_.resp))
+  for (i <- 0 until 4) {
+    ivlb.tlb_o(i) <> itlb.io.requestor(i)
+    ivlb.pmp_i(i) <> pmp_check(i).resp
+  }
+
+  io.ptw_mg.ptw_req_o   <> ivlb.ptw_req_o
+  io.ptw_mg.ptw_resp_i  <> ivlb.ptw_resp_i
 
   icache.io.itlb(0)     <> ivlb.tlb_i(0)
   icache.io.itlb(1)     <> ivlb.tlb_i(1)
@@ -125,9 +130,6 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   icache.io.pmp(1).resp <> ivlb.pmp_o(1)
   icache.io.pmp(2).resp <> ivlb.pmp_o(2)
   ifu.io.pmp.resp       <> ivlb.pmp_o(3)
-
-  io.ptw_mg.ptw_req_o   <> ivlb.ptw_req_o
-  io.ptw_mg.ptw_resp_i  <> ivlb.ptw_resp_i
 
 
   //IFU-Ftq
