@@ -116,7 +116,7 @@ class RobDeqPtrWrapper(implicit p: Parameters) extends XSModule with HasCircular
   val commitCnt = Mux(allowOnlyOne, canCommit(0), normalCommitCnt)
 
   val commitDeqPtrVec = VecInit(deqPtrVec.map(_ + commitCnt))
-  val deqPtrVec_next = Mux(io.state === 0.U && !redirectOutValid, commitDeqPtrVec, deqPtrVec)
+  val deqPtrVec_next = Mux(io.state === 0.U && !redirectOutValid && !RegNext(redirectOutValid), commitDeqPtrVec, deqPtrVec)
 
   deqPtrVec := deqPtrVec_next
 

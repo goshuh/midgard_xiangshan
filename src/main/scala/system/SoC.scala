@@ -33,7 +33,12 @@ import xiangshan.backend.fu.PMAConst
 import huancun._
 import huancun.debug.TLLogger
 
+import midgard._
+import midgard.util._
+
 case object SoCParamsKey extends Field[SoCParameters]
+
+case object MidgardKey extends Field[midgard.Param]
 
 case class SoCParameters
 (
@@ -147,16 +152,25 @@ trait HaveAXI4MemPort {
     )
   ))
 
+  val mmuWrapper = LazyModule(new MidgardMMUWrapper())
+
   val mem_xbar = TLXbar()
   mem_xbar :=*
     TLXbar() :=*
     TLBuffer.chainNode(2) :=*
-    TLCacheCork() :=*
+    TLWidthWidget(64) :=*
+    mmuWrapper.node :=*
+    TLWidthWidget(32) :=*
+    TLBuffer.chainNode(2) :=*
     bankedNode
 
   mem_xbar :=
     TLWidthWidget(8) :=
     TLBuffer.chainNode(3, name = Some("PeripheralXbar_to_MemXbar_buffer")) :=
+    peripheralXbar
+
+  mmuWrapper.cfg_node :=
+    TLWidthWidget(8) :=
     peripheralXbar
 
   memAXI4SlaveNode :=
@@ -189,9 +203,10 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
     supportsWrite = TransferSizes(1, 8),
     resources = uartDevice.reg
   )
+  val mmuRange = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
   val peripheralRange = AddressSet(
     0x0, 0x7fffffff
-  ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange))
+  ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange)).flatMap(x => x.subtract(mmuRange))
   val peripheralNode = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
     Seq(AXI4SlaveParameters(
       address = peripheralRange,
