@@ -55,11 +55,9 @@ class MidgardFSPTWWrapper(N: Int, P: Param)(implicit p: Parameters) extends Lazy
 
     // a channel
     mem.a.valid                := u_ptw.mem_req_o.valid
-    mem.a.bits                 := edge.Get(
-      fromSource = 0.U,
-      toAddress  = u_ptw.mem_req_o.bits.mcn ## 0.U(6.W),
-      lgSize     = 6.U
-    )._2
+    mem.a.bits                 := edge.Get(0.U,
+                                           u_ptw.mem_req_o.bits.mcn ## 0.U(6.W),
+                                           6.U)._2
 
     u_ptw.mem_req_o.ready      := mem.a.ready
 

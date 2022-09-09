@@ -151,16 +151,25 @@ trait HaveAXI4MemPort {
     )
   ))
 
+  val bmmu = LazyModule(new MidgardBSMMUWrapper())
+
   val mem_xbar = TLXbar()
   mem_xbar :=*
     TLXbar() :=*
     TLBuffer.chainNode(2) :=*
-    TLCacheCork() :=*
+    TLWidthWidget(64) :=*
+    bmmu.adp_node :=*
+    TLWidthWidget(32) :=*
+    TLBuffer.chainNode(2) :=*
     bankedNode
 
   mem_xbar :=
     TLWidthWidget(8) :=
     TLBuffer.chainNode(3, name = Some("PeripheralXbar_to_MemXbar_buffer")) :=
+    peripheralXbar
+
+  bmmu.ctl_node :=
+    TLWidthWidget(8) :=
     peripheralXbar
 
   memAXI4SlaveNode :=
@@ -197,13 +206,6 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
   // midgard bsmmu
   val bmmuRange  = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
   val bmmuDevice = new SimpleDevice("bmmu", Seq("midgard.bmmu"))
-  val bmmuParams = AXI4SlaveParameters(
-    address       = Seq(bmmuRange),
-    regionType    = RegionType.UNCACHED,
-    supportsRead  = TransferSizes(1, 8),
-    supportsWrite = TransferSizes(1, 8),
-    resources     = bmmuDevice.reg
-  )
 
   // add interrupts
   ResourceBinding {
@@ -221,7 +223,7 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
       supportsRead = TransferSizes(1, 8),
       supportsWrite = TransferSizes(1, 8),
       interleavedId = Some(0)
-    ), uartParams, bmmuParams),
+    ), uartParams),
     beatBytes = 8
   )))
 
