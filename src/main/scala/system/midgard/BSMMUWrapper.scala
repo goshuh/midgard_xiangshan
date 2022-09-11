@@ -40,6 +40,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
           require(m.regionType == RegionType.UNCACHED)
 
           m.v1copy(
+            address          = AddressSet(0x0L, (1L << Q.maBits) - 1L).subtract(AddressSet(0x0L, 0x7fffffffL)),
             supportsAcquireB = m.supportsGet,
             supportsAcquireT = m.supportsPutFull,
             alwaysGrantsT    = true,

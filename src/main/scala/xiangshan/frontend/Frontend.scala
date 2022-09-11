@@ -107,11 +107,11 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   icache.io.prefetch <> ftq.io.toPrefetch
 
   // midgard
-  val ivlb = Module(new MidgardFSVLBWrapper(4, true, p(MidgardKey)))
+  val ivlb = Module(new MidgardFSVLBWrapper(4, true, 2, p(MidgardKey)))
 
   ivlb.sfence_i := io.sfence
   ivlb.csr_i    := tlbCsr
-  ivlb.flush_i  := Fill(4, needFlush)
+  ivlb.flush_i  := needFlush
 
   for (i <- 0 until 4) {
     ivlb.tlb_o(i) <> itlb.io.requestor(i)

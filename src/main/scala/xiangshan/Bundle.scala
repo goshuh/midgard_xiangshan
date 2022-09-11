@@ -423,7 +423,7 @@ class TlbSatpBundle(implicit p: Parameters) extends SatpStruct {
     val sa = satp_value.asTypeOf(new SatpStruct)
     mode := sa.mode
     asid := sa.asid
-    ppn := Cat(0.U(44-PAddrBits), sa.ppn(PAddrBits-1, 0)).asUInt()
+    ppn := Cat(0.U(56-PAddrBits), sa.ppn(PAddrBits-13, 0)).asUInt()
     changed := DataChanged(sa.asid) // when ppn is changed, software need do the flush
   }
 }

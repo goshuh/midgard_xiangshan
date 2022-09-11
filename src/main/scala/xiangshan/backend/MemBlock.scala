@@ -238,11 +238,11 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   dtlb.map(_.ptw_replenish := pmp_check_ptw.io.resp)
 
   // midgard
-  val dvlb = Module(new MidgardFSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, false, p(MidgardKey)))
+  val dvlb = Module(new MidgardFSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, false, 0, p(MidgardKey)))
 
   dvlb.sfence_i := sfence
   dvlb.csr_i    := tlbcsr
-  dvlb.flush_i  := 0.U
+  dvlb.flush_i  := false.B
 
   for (i <- 0 until (exuParameters.LduCnt + exuParameters.StuCnt)) {
     dvlb.tlb_o(i) <> dtlb_reqs(i)

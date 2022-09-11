@@ -18,7 +18,7 @@ class MidgardFSPTWIO(P: Param) extends Bundle {
 }
 
 
-class MidgardFSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) extends Module
+class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Parameters) extends Module
   with HasXSParameter
   with HasCSRConst {
 
@@ -27,7 +27,7 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Paramete
 
   val sfence_i   = IO(                   Input(new SfenceBundle))
   val csr_i      = IO(                   Input(new TlbCsrBundle))
-  val flush_i    = IO(                   Input(UInt(N.W)))
+  val flush_i    = IO(                   Input(Bool()))
 
   val tlb_i      = IO(Vec(N, Flipped(          new TlbRequestIO)))
   val tlb_o      = IO(Vec(N,                   new TlbRequestIO))
@@ -50,6 +50,8 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Paramete
   val satp       = csr_i.satp
   val mode       = P.tlbEn.B ?? priv.imode :: priv.dmode
 
+  // expand flush
+  val flush      = Any(Exp(flush_i, F))
 
   //
   // inst
@@ -63,7 +65,7 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Paramete
 
   u_vlb.kill_i      := sfence_all ##
                        sfence_one ##
-                      (sfence || satp.changed || Any(flush_i))
+                      (sfence || satp.changed || flush)
   u_vlb.kill_asid_i := sfence_i.bits.asid
 
   ptw_req_o         <> u_vlb.ptw_req_o
@@ -88,8 +90,6 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Paramete
 
   // midgard connection
   for (i <- 0 until N) {
-    val flush    = flush_i(i)
-
     val vlb_req  = u_vlb.vlb_req_i (i)
     val vlb_resp = u_vlb.vlb_resp_o(i)
     val vlb_fill = u_vlb.vlb_fill_o
@@ -106,7 +106,7 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Paramete
     val req_vld  = dontTouch(Wire(Bool()))
     val req_vpn  = dontTouch(Wire(UInt((VAddrBits - 12).W)))
     val req_cmd  = dontTouch(Wire(UInt(3.W)))
-    val req_kill = dontTouch(Wire(UInt(3.W)))
+    val req_kill = dontTouch(Wire(UInt(2.W)))
 
     vlb_req.valid := req_vld
     vlb_req.bits  := frontside.VLBReq(P,
@@ -163,9 +163,6 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Paramete
       // break the default connection
       tlb_o(i).req .valid := false.B
       tlb_o(i).resp.ready :=  true.B
-
-      // sanity check
-      assert(tlb_resp.valid -> tlb_resp.ready)
 
       val cmd_ld = TlbCmd.isRead (req_cmd) && !TlbCmd.isAmo(req_cmd)
       val cmd_st = TlbCmd.isWrite(req_cmd) ||  TlbCmd.isAmo(req_cmd)
