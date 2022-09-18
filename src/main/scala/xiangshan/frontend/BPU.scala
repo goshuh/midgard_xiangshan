@@ -213,7 +213,7 @@ abstract class BasePredictor(implicit p: Parameters) extends XSModule
   val s3_pc       = RegEnable(s2_pc, io.s2_fire)
 
   when (RegNext(RegNext(reset.asBool) && !reset.asBool)) {
-    s1_pc := reset_vector
+    s1_pc := reset_vector.pad(VAddrBits)(VAddrBits - 1, 0)
   }
 
   io.out.resp.s1.pc := s1_pc

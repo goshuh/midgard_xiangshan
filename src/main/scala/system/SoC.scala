@@ -151,26 +151,35 @@ trait HaveAXI4MemPort {
     )
   ))
 
-  val bmmu = LazyModule(new MidgardBSMMUWrapper())
-
   val mem_xbar = TLXbar()
-  mem_xbar :=*
-    TLXbar() :=*
-    TLBuffer.chainNode(2) :=*
-    TLWidthWidget(64) :=*
-    bmmu.adp_node :=*
-    TLWidthWidget(32) :=*
-    TLBuffer.chainNode(2) :=*
-    bankedNode
+
+  val bmmu = LazyModule(new MidgardBSMMUWrapper())
+  val berr = LazyModule(new EInject())
+
+  val mem_nodes =
+    Seq(mem_xbar, TLBuffer.chainNode(2)) ++
+      (if (p(EInjectKey).en) Seq(TLWidthWidget(64), berr.adp_node)                    else Seq()) ++
+      (if (p(MidgardKey).en) Seq(TLWidthWidget(64), bmmu.adp_node, TLWidthWidget(32)) else Seq(TLCacheCork())) ++
+    Seq(bankedNode)
+
+  mem_nodes.reduce(_ :=* _)
 
   mem_xbar :=
     TLWidthWidget(8) :=
     TLBuffer.chainNode(3, name = Some("PeripheralXbar_to_MemXbar_buffer")) :=
     peripheralXbar
 
-  bmmu.ctl_node :=
-    TLWidthWidget(8) :=
-    peripheralXbar
+  if (p(MidgardKey).en) {
+    bmmu.ctl_node :=
+      TLWidthWidget(8) :=
+      peripheralXbar
+  }
+
+  if (p(EInjectKey).en) {
+    berr.ctl_node :=
+      TLWidthWidget(8) :=
+      peripheralXbar
+  }
 
   memAXI4SlaveNode :=
     AXI4Buffer() :=
@@ -203,19 +212,19 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
     resources = uartDevice.reg
   )
 
-  // midgard bsmmu
-  val bmmuRange  = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
-  val bmmuDevice = new SimpleDevice("bmmu", Seq("midgard.bmmu"))
+  val bmmuRange = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
+  val berrRange = AddressSet(p(EInjectKey).ctlBase, p(EInjectKey).ctlSize)
 
   // add interrupts
   ResourceBinding {
     uartDevice.int.head.bind(this.plic.device, ResourceInt(1))
-    bmmuDevice.int.head.bind(this.plic.device, ResourceInt(2))
   }
 
   val peripheralRange = AddressSet(
     0x0, 0x7fffffff
-  ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange)).flatMap(_.subtract(bmmuRange))
+  ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange))
+   .flatMap(_.subtract(bmmuRange))
+   .flatMap(_.subtract(berrRange))
   val peripheralNode = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
     Seq(AXI4SlaveParameters(
       address = peripheralRange,
