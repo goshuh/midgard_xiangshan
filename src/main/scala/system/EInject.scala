@@ -120,8 +120,8 @@ class EInject(implicit p: Parameters) extends LazyModule {
     //
     // ctl
 
-    val ctl_req   = c.a.fire()
-    val ctl_resp  = c.d.fire()
+    val ctl_req   = c.a.fire
+    val ctl_resp  = c.d.fire
 
     val ctl_set   = Non(c.a.bits.address(3))
     val ctl_rnw   = c.a.bits.opcode === TLMessages.Get
@@ -183,7 +183,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
         cha_fsm_nxt := cha_err ?? fsm_idle :: fsm_req
       }
       is (fsm_req) {
-        cha_fsm_en  := o.a.fire()
+        cha_fsm_en  := o.a.fire
         cha_fsm_nxt := fsm_idle
       }
     }
@@ -225,7 +225,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     enq.bits.size   := i.a.bits.size
     enq.bits.source := i.a.bits.source
 
-    deq.ready       := i.d.fire() && deq.valid
+    deq.ready       := i.d.fire && deq.valid
 
     i.a.ready       := cha_fsm_is_chk
 

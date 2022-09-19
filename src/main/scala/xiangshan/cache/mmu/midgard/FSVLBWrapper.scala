@@ -52,6 +52,7 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: 
 
   // expand flush
   val flush      = Any(Exp(flush_i, F))
+  val flush_q    = RegNext(flush_i)
 
   //
   // inst
@@ -96,7 +97,7 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: 
 
     val tlb_req  = tlb_i(i).req
     val tlb_resp = tlb_i(i).resp
-    val tlb_kill = tlb_i(i).req_kill || sel_to_xs
+    val tlb_kill = tlb_i(i).req_kill || flush_q || sel_to_xs
 
     val tlb_vpn  = tlb_req.bits.vaddr(VAddrBits := 12)
     val tlb_offs = tlb_req.bits.vaddr(12.W)
@@ -115,30 +116,30 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: 
                                       req_kill)
 
     if (B) {
-      val vld_raw = dontTouch(Wire(Bool()))
-      val vld_nxt = dontTouch(Wire(Bool()))
-      val vld_q   = dontTouch(Wire(Bool()))
-      val vld     = vld_raw || vld_q
+      val vld_old = dontTouch(Wire(Bool()))
+      val vld_new = dontTouch(Wire(Bool()))
 
-      // upstream may not reissue the tlb req after sfence/satp.
-      // just retry until succeed
-      vld_raw  := sel_mg && tlb_req.fire()
-      vld_nxt  := sel_mg && vld_q && !tlb_resp.fire() && !tlb_kill || vld_raw
+      val vld_raw = sel_mg && (vld_old || vld_new)
+      val vld     = sel_mg && (vld_old || vld_new && !tlb_req.bits.kill) && !flush_q
+      val vld_q   = sel_mg &&  RegNext(vld)
 
-      vld_q    := sel_mg && RegEnable(vld_nxt && !flush,
-                                      false.B,
-                                      vld)
+      assert(tlb_req.valid -> !flush_q)
 
-      req_vld  := vld
-      req_vpn  := vld_raw  ?? tlb_vpn          :: RegEnable(tlb_vpn,          vld_raw)
-      req_cmd  := vld_raw  ?? tlb_req.bits.cmd :: RegEnable(tlb_req.bits.cmd, vld_raw)
-      req_kill := tlb_kill ## flush
+      // upstream issues random reqs. always stick to the oldest one
+      vld_new  := tlb_req.fire
+      vld_old  := vld_q && !tlb_resp.fire
+
+      req_vld  := vld_raw
+      req_vpn  := vld_old  ??  RegEnable(tlb_vpn,          vld_new) :: tlb_vpn
+      req_cmd  := vld_old  ??  RegEnable(tlb_req.bits.cmd, vld_new) :: tlb_req.bits.cmd
+      req_kill := tlb_kill ## (flush ||  vld_new && tlb_req.bits.kill)
 
       when (sel_mg) {
-        tlb_req .ready          := tlb_resp.fire() || !vld_q || tlb_kill
+        tlb_req.ready := tlb_resp.fire || !vld_q
 
-        tlb_resp.valid          := vlb_resp.valid && vlb_resp.bits.vld
-        tlb_resp.bits.paddr     := vlb_resp.bits.mpn ## RegEnable(tlb_offs, vld_raw)
+        // also fake a response for flush
+        tlb_resp.valid          := vlb_resp.valid && vlb_resp.bits.vld || vld_q && flush_q
+        tlb_resp.bits.paddr     := vlb_resp.bits.mpn ## RegEnable(tlb_offs, vld_new)
         tlb_resp.bits.miss      := false.B
         tlb_resp.bits.fast_miss := false.B
       }
@@ -147,10 +148,10 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: 
       req_vld  := sel_mg && tlb_req.valid
       req_vpn  := tlb_vpn
       req_cmd  := RegNext(tlb_req.bits.cmd)
-      req_kill := tlb_kill ## flush
+      req_kill := tlb_kill ## (flush || tlb_req.bits.kill)
 
       when (sel_mg) {
-        tlb_req .ready          :=  true.B
+        tlb_req.ready := true.B
 
         tlb_resp.valid          :=     vlb_resp.valid
         tlb_resp.bits.paddr     :=     vlb_resp.bits.mpn ## RegNext(tlb_offs)
@@ -189,7 +190,7 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: 
 
       tlb_resp.bits.static_pm.valid := RegNext(tlb_resp.valid)
       tlb_resp.bits.static_pm.bits  := RegNext(vlb_resp.bits.attr(0))
-      tlb_resp.bits.ptwBack         := vlb_fill.fire()
+      tlb_resp.bits.ptwBack         := vlb_fill.fire
 
       pmp_resp.ld                   := false.B
       pmp_resp.st                   := false.B

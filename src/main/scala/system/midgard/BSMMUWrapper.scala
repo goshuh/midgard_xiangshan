@@ -311,7 +311,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
                    chc_cev_req_raw &&  chc_cev_gnt ||
                    chc_dev_req_raw &&  chc_dev_gnt
 
-    chc_inv     := i.c.fire() && (chc_mis_req_raw || chc_hit_req_raw) && i.c.bits.source(0)
+    chc_inv     := i.c.fire && (chc_mis_req_raw || chc_hit_req_raw) && i.c.bits.source(0)
 
     // d channel
     chc_cev_gnt := i.d.ready
