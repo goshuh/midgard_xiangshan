@@ -141,7 +141,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val ctl_wdata = ctl_wmask & Rep(RegNext(ctl_set), 64) |
                    ~ctl_wmask & rdata
 
-    c.a.ready := Non(ctl_chk_q ## ctl_wen)
+    c.a.ready := Non(ctl_chk_q ## ctl_wen) && rst_done
 
     c.d.valid := ctl_vld_q
     c.d.bits  := ctl_rnw_q ??
@@ -195,7 +195,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     cha_fsm_q := RegEnable(cha_fsm_nxt, fsm_idle, cha_fsm_en)
 
     val cha_chk = (i.a.bits.address >=  P.memBase.U) &&
-                  (i.a.bits.address <= (P.memBase + P.memSize - 1).U)
+                  (i.a.bits.address <= (P.memBase + P.memSize).U)
 
     cha_gnt := ren && !wen && !ctl_ren || !cha_chk
     cha_err := err &&                      cha_chk
@@ -212,7 +212,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
                       !rst_done)
 
     // output
-    ren             := ctl_ren  || i.a.valid && cha_chk && enq.ready
+    ren             := ctl_ren  || rst_done  && i.a.valid && cha_chk && enq.ready
     raddr           := ctl_ren  ?? ctl_raddr :: i.a.bits.address(18 :+ W)
     roffs           := ctl_ren  ?? ctl_roffs :: i.a.bits.address(18 :- 6)
 
