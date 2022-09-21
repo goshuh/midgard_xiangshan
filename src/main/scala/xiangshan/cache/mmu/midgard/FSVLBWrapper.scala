@@ -188,14 +188,14 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: 
       tlb_resp.bits.excp.af.st      := false.B
       tlb_resp.bits.excp.af.instr   := false.B
 
-      tlb_resp.bits.static_pm.valid := RegNext(tlb_resp.valid)
-      tlb_resp.bits.static_pm.bits  := RegNext(vlb_resp.bits.attr(0))
+      tlb_resp.bits.static_pm.valid := tlb_resp.valid
+      tlb_resp.bits.static_pm.bits  := vlb_resp.bits.attr(0)
       tlb_resp.bits.ptwBack         := vlb_fill.fire
 
       pmp_resp.ld                   := false.B
       pmp_resp.st                   := false.B
       pmp_resp.instr                := false.B
-      pmp_resp.mmio                 := tlb_resp.bits.static_pm.bits
+      pmp_resp.mmio                 := RegNext(vlb_resp.bits.attr(0))
     }
   }
 }

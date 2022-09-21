@@ -141,6 +141,8 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val ctl_wdata = ctl_wmask & Rep(RegNext(ctl_set), 64) |
                    ~ctl_wmask & rdata
 
+    val rst_done  = dontTouch(Wire(Bool()))
+
     c.a.ready := Non(ctl_chk_q ## ctl_wen) && rst_done
 
     c.d.valid := ctl_vld_q
@@ -204,12 +206,12 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val deq_put =  deq.valid && !deq.bits.rnw
 
     // reset
-    val rst_q    = dontTouch(Wire(UInt((W + 1).W)))
-    val rst_done = rst_q(W)
+    val rst_q = dontTouch(Wire(UInt((W + 1).W)))
 
-    rst_q := RegEnable(rst_q + 1.U,
-                       0.U,
-                      !rst_done)
+    rst_q    := RegEnable(rst_q + 1.U,
+                          0.U,
+                         !rst_done)
+    rst_done := rst_q(W)
 
     // output
     ren             := ctl_ren  || rst_done  && i.a.valid && cha_chk && enq.ready
