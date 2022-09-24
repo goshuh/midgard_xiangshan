@@ -29,13 +29,26 @@ case object EInjectKey extends Field[EInjectParam]
 class EInject(implicit p: Parameters) extends LazyModule {
   val P = p(EInjectKey)
 
-  val dev = new SimpleDevice("berr", Seq("einject")) {
+  val mem_dev = new Device {
+    override def parent = Some(SoCResourceAnchors.reserved_memory)
+
+    def describe(resources: ResourceBindings): Description = {
+      Description("einject", Map("reg" -> resources("reg").map(_.value)))
+    }
+  }
+
+  ResourceBinding {
+    Resource(mem_dev, "reg").bind(ResourceAddress(
+      Seq(AddressSet(P.memBase, P.memSize * 2 + 1)),
+      ResourcePermissions(true, true, true, true, true)))
+  }
+
+  val ctl_dev = new SimpleDevice("einject", Seq("einject")) {
     override def describe(resources: ResourceBindings): Description = {
       val Description(name, mapping) = super.describe(resources)
 
       Description(name, mapping ++ Map(
-        "mem" -> Seq(ResourceAddress(Seq(AddressSet(P.memBase, P.memSize)),
-                                     ResourcePermissions(true, true, true, true, false)))
+        "memory-region" -> Seq(ResourceReference(mem_dev.label))
       ))
     }
   }
@@ -48,7 +61,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
                        supportsGet     = TransferSizes(1, 8),
                        supportsPutFull = TransferSizes(1, 8),
                        fifoId          = Some(0),
-                       resources       = dev.reg)),
+                       resources       = ctl_dev.reg)),
                      beatBytes = 8)))
 
   val adp_node = TLAdapterNode(
@@ -71,6 +84,16 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val (c, ce) = ctl_node.in.head
     val (i, ie) = adp_node.in.head
     val (o, oe) = adp_node.out.head
+
+
+    //
+    // addr
+
+    // single AddressSet
+    val lsb = log2Ceil(P.memSize + 1)
+
+    val chk = P.memBase >> lsb
+    val prv = chk + 1
 
 
     //
@@ -196,14 +219,19 @@ class EInject(implicit p: Parameters) extends LazyModule {
 
     cha_fsm_q := RegEnable(cha_fsm_nxt, fsm_idle, cha_fsm_en)
 
-    val cha_chk = (i.a.bits.address >=  P.memBase.U) &&
-                  (i.a.bits.address <= (P.memBase + P.memSize).U)
+    val cha_chk = i.a.bits.address(i.params.addressBits := lsb) === chk.U
+    val cha_prv = i.a.bits.address(i.params.addressBits := lsb) === prv.U
+    val cha_req = dontTouch(WireInit(i.a.bits))
+
+    // access to the privileged range goes back to the underlying checked range
+    cha_req.address := cha_prv ?? (chk.U ## i.a.bits.address(lsb.W)) ::
+                                            i.a.bits.address
 
     cha_gnt := ren && !wen && !ctl_ren || !cha_chk
     cha_err := err &&                      cha_chk
 
-    val deq_get =  deq.valid &&  deq.bits.rnw
-    val deq_put =  deq.valid && !deq.bits.rnw
+    val deq_get = deq.valid &&  deq.bits.rnw
+    val deq_put = deq.valid && !deq.bits.rnw
 
     // reset
     val rst_q = dontTouch(Wire(UInt((W + 1).W)))
@@ -232,7 +260,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     i.a.ready       := cha_fsm_is_chk
 
     o.a.valid       := cha_fsm_is_req
-    o.a.bits        := RegEnable(i.a.bits, cha_fsm_is_chk && !cha_err)
+    o.a.bits        := RegEnable(cha_req, cha_fsm_is_chk && !cha_err)
 
     i.d.valid       := deq.valid && dly_vld || o.d.valid
     i.d.bits        := deq_get ??

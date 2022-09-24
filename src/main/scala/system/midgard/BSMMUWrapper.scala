@@ -24,7 +24,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
                        supportsPutFull    = TransferSizes(1, 64),
                        supportsPutPartial = TransferSizes(1, 16),
                        fifoId             = Some(0),
-                       resources          = new SimpleDevice("bmmu", Seq("midgard.bmmu")).reg)),
+                       resources          = new SimpleDevice("midgard", Seq("midgard.bmmu")).reg)),
                      beatBytes = 64)))
 
   val adp_node = TLAdapterNode(

@@ -31,7 +31,7 @@ trait HasXSDts {
       "status" -> "okay".asProperty,
       "clock-frequency" -> 0.asProperty,
       "riscv,isa" -> "rv64imafdc".asProperty,
-      "timebase-frequency" -> 1000000.asProperty
+      "timebase-frequency" -> 0.asProperty
     )
 
     def tileProperties: PropertyMap = {

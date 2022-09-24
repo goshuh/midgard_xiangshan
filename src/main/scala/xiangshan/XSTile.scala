@@ -3,7 +3,7 @@ package xiangshan
 import chisel3._
 import chipsalliance.rocketchip.config.{Config, Parameters}
 import chisel3.util.{Valid, ValidIO}
-import freechips.rocketchip.diplomacy.{BundleBridgeSink, LazyModule, LazyModuleImp, LazyModuleImpLike}
+import freechips.rocketchip.diplomacy.{BundleBridgeSink, LazyModule, LazyModuleImp, LazyModuleImpLike, ResourceBinding}
 import freechips.rocketchip.interrupts.{IntSinkNode, IntSinkPortParameters, IntSinkPortSimple}
 import freechips.rocketchip.tile.{BusErrorUnit, BusErrorUnitParams, BusErrors}
 import freechips.rocketchip.tilelink.{BankBinder, TLBuffer, TLIdentityNode, TLNode, TLTempNode, TLXbar}
@@ -42,7 +42,7 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
   val mmio_port = TLIdentityNode() // to L3
   val memory_port = TLIdentityNode()
   val beu = LazyModule(new BusErrorUnit(
-    new XSL1BusErrors(), BusErrorUnitParams(0x38010000)
+    new XSL1BusErrors(), BusErrorUnitParams(0x38010000 + coreParams.HartId * 0x1000)
   ))
   val busPMU = BusPerfMonitor(enable = !debugOpts.FPGAPlatform)
   val l1d_logger = TLLogger(s"L2_L1D_${coreParams.HartId}", !debugOpts.FPGAPlatform)
@@ -69,6 +69,12 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
   lazy val module = new LazyModuleImp(this){
     val beu_errors = IO(Input(chiselTypeOf(beu.module.io.errors)))
     beu.module.io.errors <> beu_errors
+  }
+
+  ResourceBinding {
+    beu.node.edges.in.head.manager.managers.foreach { m =>
+      m.resources.foreach(_.bind(m.toResource))
+    }
   }
 }
 

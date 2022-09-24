@@ -21,7 +21,7 @@ import chisel3._
 import chisel3.util._
 import device.{DebugModule, TLPMA, TLPMAIO}
 import freechips.rocketchip.devices.tilelink.{CLINT, CLINTParams, DevNullParams, PLICParams, TLError, TLPLIC}
-import freechips.rocketchip.diplomacy.{AddressSet, IdRange, InModuleBody, LazyModule, LazyModuleImp, MemoryDevice, RegionType, SimpleDevice, TransferSizes}
+import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.interrupts.{IntSourceNode, IntSourcePortSimple}
 import freechips.rocketchip.regmapper.{RegField, RegFieldAccessType, RegFieldDesc, RegFieldGroup}
 import utils.{BinaryArbiter, TLEdgeBuffer}
@@ -37,11 +37,33 @@ import freechips.rocketchip.diplomacy.{Resource, ResourceBinding, ResourceInt, B
 case object SoCParamsKey extends Field[SoCParameters]
 case object MidgardKey   extends Field[midgard.Param]
 
+object SoCResourceAnchors {
+  val chosen = new Device {
+    def describe(resources: ResourceBindings): Description = {
+      Description("chosen", Map(
+        "bootargs"    -> resources("bootargs").map(_.value),
+        "stdout-path" -> resources("stdout"  ).map(_.value)
+      ))
+    }
+  }
+
+  val reserved_memory = new Device { r =>
+    def describe(resources: ResourceBindings): Description = {
+      Description("reserved-memory", Map(
+        "#address-cells" -> resources("width").map(_.value),
+        "#size-cells"    -> resources("width").map(_.value),
+        "ranges"         -> Nil
+      ))
+    }
+  }
+}
+
 case class SoCParameters
 (
   EnableILA: Boolean = false,
   PAddrBits: Int = 36,
   extIntrs: Int = 64,
+  timebase: Int = 10000000,
   L3NBanks: Int = 4,
   L3CacheParamsOpt: Option[HCCacheParameters] = Some(HCCacheParameters(
     name = "l3",
@@ -153,13 +175,13 @@ trait HaveAXI4MemPort {
 
   val mem_xbar = TLXbar()
 
-  val bmmu = LazyModule(new MidgardBSMMUWrapper())
-  val berr = LazyModule(new EInject())
+  val bmmu = if (p(MidgardKey).en) Some(LazyModule(new MidgardBSMMUWrapper())) else None
+  val berr = if (p(EInjectKey).en) Some(LazyModule(new EInject()            )) else None
 
   val mem_nodes =
     Seq(mem_xbar, TLBuffer.chainNode(2)) ++
-      (if (p(EInjectKey).en) Seq(TLWidthWidget(64), berr.adp_node)                    else Seq()) ++
-      (if (p(MidgardKey).en) Seq(TLWidthWidget(64), bmmu.adp_node, TLWidthWidget(32)) else Seq(TLCacheCork())) ++
+      berr.map(e => Seq(TLWidthWidget(64), e.adp_node                   )).getOrElse(Seq()) ++
+      bmmu.map(e => Seq(TLWidthWidget(64), e.adp_node, TLWidthWidget(32))).getOrElse(Seq(TLCacheCork())) ++
     Seq(bankedNode)
 
   mem_nodes.reduce(_ :=* _)
@@ -169,17 +191,8 @@ trait HaveAXI4MemPort {
     TLBuffer.chainNode(3, name = Some("PeripheralXbar_to_MemXbar_buffer")) :=
     peripheralXbar
 
-  if (p(MidgardKey).en) {
-    bmmu.ctl_node :=
-      TLWidthWidget(8) :=
-      peripheralXbar
-  }
-
-  if (p(EInjectKey).en) {
-    berr.ctl_node :=
-      TLWidthWidget(8) :=
-      peripheralXbar
-  }
+  bmmu.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
+  berr.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
 
   memAXI4SlaveNode :=
     AXI4Buffer() :=
@@ -215,9 +228,12 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
   val bmmuRange = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
   val berrRange = AddressSet(p(EInjectKey).ctlBase, p(EInjectKey).ctlSize)
 
-  // add interrupts
   ResourceBinding {
+    // add interrupt
     uartDevice.int.head.bind(this.plic.device, ResourceInt(1))
+
+    Resource(SoCResourceAnchors.chosen, "bootargs").bind(ResourceString("earlycon console=ttyUL0"))
+    Resource(SoCResourceAnchors.chosen, "stdout"  ).bind(ResourceAlias(uartDevice.label))
   }
 
   val peripheralRange = AddressSet(
