@@ -336,7 +336,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                 P.clWid.U,
                                 TLPermissions.toT,
                                 llc_resp.bits.data,
-                                false.B,
+                                llc_resp.bits.err,
                                 llc_resp.bits.err)
 
     // e channel
