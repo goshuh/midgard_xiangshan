@@ -76,7 +76,7 @@ class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: 
   //
   // switch
 
-  val sel_mg    = (satp.mode === 0xf.U) && (mode =/= ModeM)
+  val sel_mg    = (satp.mode === 0xf.U) && (mode =/= ModeM) && P.en.B
   val sel_mg_q  =  RegNext(sel_mg)
 
   // mode can toggle

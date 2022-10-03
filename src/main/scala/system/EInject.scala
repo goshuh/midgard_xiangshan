@@ -39,7 +39,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
 
   ResourceBinding {
     Resource(mem_dev, "reg").bind(ResourceAddress(
-      Seq(AddressSet(P.memBase, P.memSize * 2 + 1)),
+      Seq(AddressSet(P.memBase, P.memSize)),
       ResourcePermissions(true, true, true, true, true)))
   }
 
@@ -78,9 +78,6 @@ class EInject(implicit p: Parameters) extends LazyModule {
     })
 
   lazy val module = new LazyModuleImp(this) {
-    // runtime
-    val dly_i = IO(Input(UInt(32.W)))
-
     val (c, ce) = ctl_node.in.head
     val (i, ie) = adp_node.in.head
     val (o, oe) = adp_node.out.head
@@ -137,7 +134,8 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val deq = que.io.deq
 
     // random delay
-    val dly_vld = LFSR(32, deq.valid && !o.d.valid) <= dly_i
+    val dly_q   = dontTouch(Wire(UInt(32.W)))
+    val dly_vld = LFSR(32, deq.valid && !o.d.valid) <= dly_q
 
 
     //
@@ -147,26 +145,32 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val ctl_resp  = c.d.fire
 
     val ctl_set   = Non(c.a.bits.address(3))
+    val ctl_dly   = Any(c.a.bits.address(4))
     val ctl_rnw   = c.a.bits.opcode === TLMessages.Get
 
     val ctl_vld_q = RegEnable(ctl_req, false.B, ctl_req || ctl_resp)
     val ctl_rnw_q = RegEnable(ctl_rnw,          ctl_req)
     val ctl_src_q = RegEnable(c.a.bits.source,  ctl_req)
 
-    val ctl_ren   = ctl_req
+    val ctl_ren   = ctl_req && !ctl_dly
     val ctl_raddr = c.a.bits.data(18 :+ W)
     val ctl_roffs = c.a.bits.data(18 :- 6)
 
     // workaround
-    val ctl_chk_q = RegNext(ctl_req)
-    val ctl_wen   = RegNext(ctl_chk_q)
+    val ctl_ren_q = RegNext(ctl_ren)
+    val ctl_wen   = RegNext(ctl_ren_q)
     val ctl_wmask = RegEnable(Dec(ctl_roffs), ctl_ren)
     val ctl_wdata = ctl_wmask & Rep(RegNext(ctl_set), 64) |
                    ~ctl_wmask & rdata
 
     val rst_done  = dontTouch(Wire(Bool()))
 
-    c.a.ready := Non(ctl_chk_q ## ctl_wen) && rst_done
+    // easy for software
+    dly_q     := RegEnable(c.a.bits.data(31, 0),
+                          ~0.U(32.W),
+                           ctl_req && ctl_dly)
+
+    c.a.ready := Non(ctl_ren_q ## ctl_wen) && rst_done
 
     c.d.valid := ctl_vld_q
     c.d.bits  := ctl_rnw_q ??
@@ -248,7 +252,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
 
     wen             := ctl_wen  || Non(rst_done)
     waddr           := rst_done ?? RegEnable(ctl_raddr, ctl_ren)   :: rst_q(W.W)
-    wdata           := rst_done ?? RegEnable(ctl_wdata, ctl_chk_q) :: 0.U
+    wdata           := rst_done ?? RegEnable(ctl_wdata, ctl_ren_q) :: 0.U
 
     enq.valid       := cha_fsm_is_chk && cha_err
     enq.bits.rnw    := i.a.bits.opcode === TLMessages.Get

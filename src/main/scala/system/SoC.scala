@@ -180,9 +180,9 @@ trait HaveAXI4MemPort {
 
   val mem_nodes =
     Seq(mem_xbar, TLBuffer.chainNode(2)) ++
-      berr.map(e => Seq(TLWidthWidget(64), e.adp_node                   )).getOrElse(Seq()) ++
-      bmmu.map(e => Seq(TLWidthWidget(64), e.adp_node, TLWidthWidget(32))).getOrElse(Seq(TLCacheCork())) ++
-    Seq(bankedNode)
+      berr.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq()) ++
+      bmmu.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq(TLCacheCork())) ++
+    Seq(TLWidthWidget(32), bankedNode)
 
   mem_nodes.reduce(_ :=* _)
 

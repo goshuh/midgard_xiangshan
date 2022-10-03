@@ -33,7 +33,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
         clients = cp.clients.map { c =>
           c.v1copy(
             supportsProbe = TransferSizes.none,
-            sourceId      = IdRange(0, Q.mrqWays))
+            sourceId      = IdRange(0, if (Q.bsSkip) 1 << (log2Ceil(c.sourceId.end + Q.deqWays) + 1) else Q.mrqWays))
         })
     },
     managerFn = { mp =>
@@ -49,7 +49,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
             mayDenyGet       = true,
             mayDenyPut       = true)
         },
-        endSinkId = Q.mrqWays,
+        endSinkId = if (Q.bsSkip) mp.endSinkId + Q.deqWays else Q.mrqWays,
         beatBytes = 64)
     })
 
@@ -70,7 +70,10 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     // inst
 
     val N = ie.bundle.sourceBits
-    val P = p(MidgardKey).copy(llcIdx = N + 1)
+    val M = if (Q.bsSkip) N - 1 else N
+
+    val P = Q.copy(llcIdx  = if (Q.bsSkip) N      else N + 1,
+                   mrqWays = if (Q.bsSkip) 1 << N else Q.mrqWays)
 
     val u_mmu = Module(new backside.MMU(P))
 
@@ -125,9 +128,6 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val inv_wen  = dontTouch(Wire(Bool()))
     val deq_wen  = dontTouch(Wire(Bool()))
     val cfg_norm = ctl_req && !inv_wen && !deq_wen
-
-    // simplification
-    assert(cfg_norm -> (c.a.bits.size === 3.U))
 
     val cfg_resp_vld = RegEnable(cfg_norm, false.B, ctl_req || ctl_resp)
     val cfg_resp     = ctl_rnw_q ??
@@ -317,7 +317,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     chc_cev_gnt := i.d.ready
 
     // priority: cev/dev > acq
-    val chd_ack_req = llc_resp.valid && llc_resp.bits.idx(N)
+    val chd_ack_req = llc_resp.valid && llc_resp.bits.idx(M)
     val chd_ack_gnt = chc_cev_gnt && !chc_cev_req
 
     val chd_sel_dev = chd_ack_req && !llc_resp.bits.rnw
@@ -328,11 +328,11 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                      P.clWid.U,
                                      false.B) ::
                    chd_sel_dev ??
-                       ie.ReleaseAck(llc_resp.bits.idx(N.W),
+                       ie.ReleaseAck(llc_resp.bits.idx(M.W),
                                      P.clWid.U,
                                      llc_resp.bits.err) ::
-                       ie.Grant(llc_resp.bits.idx(N.W),
-                                llc_resp.bits.idx(N.W),
+                       ie.Grant(llc_resp.bits.idx(M.W),
+                                llc_resp.bits.idx(M.W),
                                 P.clWid.U,
                                 TLPermissions.toT,
                                 llc_resp.bits.data,
@@ -358,14 +358,14 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     llc_req.valid  := llc_sel_chc || cha_acq_req
     llc_req.bits   := llc_sel_chc ??
                           backside.MemReq(P,
-                                          llc_sel_ack ## i.c.bits.source,
+                                          llc_sel_ack ## i.c.bits.source(M := 0),
                                           false.B,
                                           i.c.bits.address(P.maBits := P.clWid),
                                           0.U,
                                           i.c.bits.data,
                                           P.llcIdx) ::
                           backside.MemReq(P,
-                                          true.B ## i.a.bits.source,
+                                          true.B ## i.a.bits.source(M := 0),
                                           true.B,
                                           i.a.bits.address(P.maBits := P.clWid),
                                           0.U,
@@ -373,8 +373,8 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                           P.llcIdx)
 
     // llc resp
-    llc_resp.ready := llc_resp.bits.idx(N) && chd_ack_gnt ||
-                     !llc_resp.bits.idx(N)
+    llc_resp.ready := llc_resp.bits.idx(M) && chd_ack_gnt ||
+                     !llc_resp.bits.idx(M)
 
     // prb req
     prb_req.ready  := chb_prb_gnt
