@@ -340,6 +340,7 @@ class ExternalInterruptIO(implicit p: Parameters) extends XSBundle {
   val meip = Input(Bool())
   val seip = Input(Bool())
   val debug = Input(Bool())
+  val sbip = Input(Bool()) // store buffer interrupt pending
 }
 
 class CSRSpecialIO(implicit p: Parameters) extends XSBundle {

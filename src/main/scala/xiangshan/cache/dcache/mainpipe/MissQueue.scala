@@ -375,6 +375,7 @@ class MissEntry(edge: TLEdgeOut)(implicit p: Parameters) extends DCacheModule {
   refill.data := refill_data.asTypeOf((new RefillPipeReq).data)
   refill.miss_id := io.id
   refill.id := req.id
+  refill.store_mask := req.store_mask
   def missCohGen(cmd: UInt, param: UInt, dirty: Bool) = {
     val c = categorize(cmd)
     MuxLookup(Cat(c, param, dirty), Nothing, Seq(
