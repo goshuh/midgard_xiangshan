@@ -211,6 +211,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
 
   class Interrupt extends Bundle {
 //  val d = Output(Bool())    // Debug
+    val c = new Priv // custom, corresponds to mip(14,11)
     val e = new Priv
     val t = new Priv
     val s = new Priv
@@ -354,11 +355,15 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   // Page 36 in riscv-priv: The low bit of mepc (mepc[0]) is always zero.
   val mepcMask = ~(0x1.U(XLEN.W))
 
-  val mie = RegInit(0.U(XLEN.W))
+  val mie = Reg(UInt(XLEN.W))
   val mipWire = WireInit(0.U.asTypeOf(new Interrupt))
   val mipReg  = RegInit(0.U(XLEN.W))
-  val mipFixMask = ZeroExt(GenMask(9) | GenMask(5) | GenMask(1), XLEN)
+  // val mipFixMask = ZeroExt(GenMask(9) | GenMask(5) | GenMask(1), XLEN)
+  val mipFixMask = Fill(XLEN,1.B) // enable all by default
   val mip = (mipWire.asUInt | mipReg).asTypeOf(new Interrupt)
+  mipReg := mip.asUInt
+  mie := Fill(XLEN,1.U) // enable all by default
+  dontTouch(mip)
 
   def getMisaMxl(mxl: Int): UInt = {mxl.U << (XLEN-2)}.asUInt
   def getMisaExt(ext: Char): UInt = {1.U << (ext.toInt - 'a'.toInt)}.asUInt
@@ -933,6 +938,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   /**
     * Exception and Intr
     */
+  mstatusStruct.ie.m := true.B // enable machine interrupt
   val ideleg =  (mideleg & mip.asUInt)
   def priviledgedEnableDetect(x: Bool): Bool = Mux(x, ((priviledgeMode === ModeS) && mstatusStruct.ie.s) || (priviledgeMode < ModeS),
     ((priviledgeMode === ModeM) && mstatusStruct.ie.m) || (priviledgeMode < ModeM))
@@ -940,25 +946,31 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val debugIntr = csrio.externalInterrupt.debug & debugIntrEnable
   XSDebug(debugIntr, "Debug Mode: debug interrupt is asserted and valid!")
   // send interrupt information to ROB
-  val intrVecEnable = Wire(Vec(12, Bool()))
+  val intrWidth = (new Interrupt).getWidth
+  val intrVecEnable = Wire(Vec(intrWidth, Bool()))
   val disableInterrupt = debugMode || (dcsrData.step && !dcsrData.stepie)
   intrVecEnable.zip(ideleg.asBools).map{case(x,y) => x := priviledgedEnableDetect(y) && !disableInterrupt}
-  val intrVec = Cat(debugIntr && !debugMode, (mie(11,0) & mip.asUInt & intrVecEnable.asUInt))
+  val intrVec = Cat(debugIntr && !debugMode, (mie(intrWidth-1,0) & mip.asUInt & intrVecEnable.asUInt))
   val intrBitSet = intrVec.orR
   csrio.interrupt := intrBitSet
   // Page 45 in RISC-V Privileged Specification
   // The WFI instruction can also be executed when interrupts are disabled. The operation of WFI
   // must be unaffected by the global interrupt bits in mstatus (MIE and SIE) and the delegation
   // register mideleg, but should honor the individual interrupt enables (e.g, MTIE).
-  csrio.wfi_event := debugIntr || (mie(11, 0) & mip.asUInt).orR
+  csrio.wfi_event := debugIntr || (mie(intrWidth-1, 0) & mip.asUInt).orR
   mipWire.t.m := csrio.externalInterrupt.mtip
   mipWire.s.m := csrio.externalInterrupt.msip
   mipWire.e.m := csrio.externalInterrupt.meip
   mipWire.e.s := csrio.externalInterrupt.seip
+  mipWire.c.m := csrio.externalInterrupt.sbip
+  dontTouch(csrio.externalInterrupt.sbip)
+
 
   // interrupts
   val intrNO = IntPriority.foldRight(0.U)((i: Int, sum: UInt) => Mux(intrVec(i), i.U, sum))
-  val raiseIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt
+  val hasIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt
+  val hasSBIntr = (intrNO === IRQ_SBIP.U) && hasIntr
+  val raiseIntr = hasIntr && !hasSBIntr // if store buffer interrupt, convert to exception
   val ivmEnable = tlbBundle.priv.imode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
   val iexceptionPC = Mux(ivmEnable, SignExt(csrio.exception.bits.uop.cf.pc, XLEN), csrio.exception.bits.uop.cf.pc)
   val dvmEnable = tlbBundle.priv.dmode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
@@ -967,7 +979,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val raiseDebugIntr = intrNO === IRQ_DEBUG.U && raiseIntr
 
   // exceptions
-  val raiseException = csrio.exception.valid && !csrio.exception.bits.isInterrupt
+  val raiseException = csrio.exception.valid && !csrio.exception.bits.isInterrupt || hasSBIntr
   val hasInstrPageFault = csrio.exception.bits.uop.cf.exceptionVec(instrPageFault) && raiseException
   val hasLoadPageFault = csrio.exception.bits.uop.cf.exceptionVec(loadPageFault) && raiseException
   val hasStorePageFault = csrio.exception.bits.uop.cf.exceptionVec(storePageFault) && raiseException
@@ -975,7 +987,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val hasLoadAddrMisaligned = csrio.exception.bits.uop.cf.exceptionVec(loadAddrMisaligned) && raiseException
   val hasInstrAccessFault = csrio.exception.bits.uop.cf.exceptionVec(instrAccessFault) && raiseException
   val hasLoadAccessFault = csrio.exception.bits.uop.cf.exceptionVec(loadAccessFault) && raiseException
-  val hasStoreAccessFault = csrio.exception.bits.uop.cf.exceptionVec(storeAccessFault) && raiseException
+  val hasStoreAccessFault = csrio.exception.bits.uop.cf.exceptionVec(storeAccessFault) && raiseException || hasSBIntr
   val hasbreakPoint = csrio.exception.bits.uop.cf.exceptionVec(breakPoint) && raiseException
   val hasSingleStep = csrio.exception.bits.uop.ctrl.singleStep && raiseException
   val hasTriggerHit = (csrio.exception.bits.uop.cf.trigger.hit) && raiseException
@@ -985,7 +997,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     p"backend hit vec ${Binary(csrio.exception.bits.uop.cf.trigger.backendHit.asUInt)}\n")
 
   val raiseExceptionVec = csrio.exception.bits.uop.cf.exceptionVec
-  val regularExceptionNO = ExceptionNO.priorities.foldRight(0.U)((i: Int, sum: UInt) => Mux(raiseExceptionVec(i), i.U, sum))
+  val regularExceptionNO = ExceptionNO.priorities.foldRight(0.U)((i: Int, sum: UInt) => Mux(raiseExceptionVec(i) || (i.U === storeAccessFault.U && hasSBIntr), i.U, sum))
   val exceptionNO = Mux(hasSingleStep || hasTriggerHit, 3.U, regularExceptionNO)
   val causeNO = (raiseIntr << (XLEN-1)).asUInt | Mux(raiseIntr, intrNO, exceptionNO)
 
@@ -1103,6 +1115,9 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
       mstatusNew.pie.s := mstatusOld.ie.s
       mstatusNew.ie.s := false.B
       priviledgeMode := ModeS
+
+      when (raiseIntr) { mipReg := mipReg.bitSet(causeNO(4,0), false.B) }
+      when (raiseException && hasSBIntr) { mipReg := mipReg.bitSet(15.U, false.B) }
       when (clearTval) { stval := 0.U }
     }.otherwise {
       mcause := causeNO
@@ -1111,6 +1126,9 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
       mstatusNew.pie.m := mstatusOld.ie.m
       mstatusNew.ie.m := false.B
       priviledgeMode := ModeM
+
+      when (raiseIntr) { mipReg := mipReg.bitSet(causeNO(4,0), false.B) }
+      when (raiseException && hasSBIntr) { mipReg := mipReg.bitSet(15.U, false.B) }
       when (clearTval) { mtval := 0.U }
     }
     mstatus := mstatusNew.asUInt

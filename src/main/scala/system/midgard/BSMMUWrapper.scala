@@ -133,7 +133,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val cfg_resp     = ctl_rnw_q ??
                            ce.AccessAck(ctl_src_q,
                                         3.U,
-                                        Rep(cfg_rdata, 8)) ::
+                                        Rep(RegNext(cfg_rdata), 8)) ::
                            ce.AccessAck(ctl_src_q,
                                         3.U)
 

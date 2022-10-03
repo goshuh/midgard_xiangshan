@@ -128,7 +128,7 @@ class TLB(Width: Int, Block: Seq[Boolean], q: TLBParameters)(implicit p: Paramet
     XSDebug(req_out_v(i), p"(${i.U}) hit:${hit} miss:${miss} ppn:${Hexadecimal(ppn)} perm:${perm}\n")
 
     val paddr = Cat(ppn, get_off(req_out(i).vaddr))
-    val vaddr = SignExt(req_out(i).vaddr, PAddrBits)
+    val vaddr = Mux(vmEnable, SignExt(req_out(i).vaddr, PAddrBits), ZeroExt(req_out(i).vaddr, PAddrBits))
 
     resp(i).bits.paddr := Mux(vmEnable, paddr, vaddr)
     resp(i).bits.miss := miss
