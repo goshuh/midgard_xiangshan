@@ -306,6 +306,7 @@ class DCacheLineResp(implicit p: Parameters) extends DCacheBundle
   // cache req nacked, replay it later
   val replay = Bool()
   val id     = UInt(reqIdWidth.W)
+  val err    = Bool()
   def dump() = {
     XSDebug("DCacheLineResp: data: %x id: %d miss: %b replay: %b\n",
       data, id, miss, replay)
@@ -391,10 +392,11 @@ class DCacheToSbufferIO(implicit p: Parameters) extends DCacheBundle {
 
   val main_pipe_hit_resp = ValidIO(new DCacheLineResp)
   val refill_hit_resp = ValidIO(new DCacheLineResp)
+  val exception_hit_resp = ValidIO(new DCacheLineResp)
 
   val replay_resp = ValidIO(new DCacheLineResp)
 
-  def hit_resps: Seq[ValidIO[DCacheLineResp]] = Seq(main_pipe_hit_resp, refill_hit_resp)
+  def hit_resps: Seq[ValidIO[DCacheLineResp]] = Seq(main_pipe_hit_resp, refill_hit_resp, exception_hit_resp)
 }
 
 class DCacheToLsuIO(implicit p: Parameters) extends DCacheBundle {
@@ -410,6 +412,7 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val lsu = new DCacheToLsuIO
   val csr = new L1CacheToCsrIO
   val error = new L1CacheErrorInfo
+  val sbip = Output(Bool())
   val mshrFull = Output(Bool())
 }
 
@@ -428,6 +431,15 @@ class DCache()(implicit p: Parameters) extends LazyModule with HasDCacheParamete
 
   val clientNode = TLClientNode(Seq(clientParameters))
 
+  val excClientParameters = TLMasterPortParameters.v1(
+    Seq(TLMasterParameters.v1(
+      name = "exception handler",
+      sourceId = IdRange(100, 101),
+    )),
+  )
+
+  val excClientNode = TLClientNode(Seq(excClientParameters))
+
   lazy val module = new DCacheImp(this)
 }
 
@@ -438,6 +450,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   val (bus, edge) = outer.clientNode.out.head
   require(bus.d.bits.data.getWidth == l1BusDataWidth, "DCache: tilelink width does not match")
+  val (exc_bus, exc_edge) = outer.excClientNode.out.head
 
   println("DCache:")
   println("  DCacheSets: " + DCacheSets)
@@ -464,11 +477,17 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   // val atomicsReplayUnit = Module(new AtomicsReplayEntry)
   val mainPipe   = Module(new MainPipe)
   val refillPipe = Module(new RefillPipe)
+  val exceptionPipe = Module(new ExceptionPipe(exc_edge))
   val missQueue  = Module(new MissQueue(edge))
   val probeQueue = Module(new ProbeQueue(edge))
   val wb         = Module(new WritebackQueue(edge))
 
+  exceptionPipe.io.mem_grant <> exc_bus.d
+  exc_bus.a <> exceptionPipe.io.mem_acquire
+
   missQueue.io.hartId := io.hartId
+  exceptionPipe.io.hartId := io.hartId
+  io.sbip := exceptionPipe.io.sbip
 
   val errors = ldu.map(_.io.error) ++ // load error
     Seq(mainPipe.io.error) // store / misc error 
@@ -638,7 +657,8 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
         s.bits.set === missQueue.io.refill_pipe_req.bits.idx &&
         s.bits.way_en === missQueue.io.refill_pipe_req.bits.way_en
     )).orR
-  block_decoupled(missQueue.io.refill_pipe_req, refillPipe.io.req, refillShouldBeBlocked)
+  // TODO: When exceptionpipe is busy, do not block non-faulty insts.
+  block_decoupled(missQueue.io.refill_pipe_req, refillPipe.io.req, refillShouldBeBlocked || !exceptionPipe.io.req.ready)
   missQueue.io.refill_pipe_resp := refillPipe.io.resp
   io.lsu.store.refill_hit_resp := RegNext(refillPipe.io.store_resp)
 
@@ -698,6 +718,11 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   }
   val touchSets = replAccessReqs.map(_.bits.set)
   replacer.access(touchSets, touchWays)
+
+  //----------------------------------------
+  // exceptionPipe
+  exceptionPipe.io.req <> refillPipe.io.exception_write
+  io.lsu.store.exception_hit_resp := RegNext(exceptionPipe.io.resp)
 
   //----------------------------------------
   // assertions
@@ -785,9 +810,11 @@ class DCacheWrapper()(implicit p: Parameters) extends LazyModule with HasXSParam
 
   val useDcache = coreParams.dcacheParametersOpt.nonEmpty
   val clientNode = if (useDcache) TLIdentityNode() else null
+  val excClientNode = if (useDcache) TLIdentityNode() else null
   val dcache = if (useDcache) LazyModule(new DCache()) else null
   if (useDcache) {
-    clientNode := dcache.clientNode
+    clientNode    := dcache.clientNode
+    excClientNode := dcache.excClientNode
   }
 
   lazy val module = new LazyModuleImp(this) with HasPerfEvents {

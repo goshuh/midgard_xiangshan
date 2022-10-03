@@ -28,6 +28,7 @@ class RefillPipeReq(implicit p: Parameters) extends DCacheBundle {
   val data = Vec(DCacheBanks, UInt(DCacheSRAMRowBits.W))
   val meta = new Meta
   val alias = UInt(2.W) // TODO: parameterize
+  val store_mask = UInt(DCacheBanks.W)
 
   val miss_id = UInt(log2Up(cfg.nMissEntries).W)
 
@@ -51,7 +52,14 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
     val tag_write = DecoupledIO(new TagWriteReq)
     val store_resp = ValidIO(new DCacheLineResp)
     val release_wakeup = ValidIO(UInt(log2Up(cfg.nMissEntries).W))
+    val exception_write = DecoupledIO(new ExceptionPipeReq)
   })
+
+  val einject = Module(new dcache.EInject(PAddrBits))
+
+  einject.io.i_addr.valid := io.req.valid
+  einject.io.i_addr.bits := io.req.bits.addr
+  val err = einject.io.o_err
 
   // Assume that write in refill pipe is always ready
   assert(RegNext(io.data_write.ready))
@@ -68,33 +76,41 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
   val idx = refill_w_req.idx
   val tag = get_tag(refill_w_req.addr)
 
-  io.data_write.valid := refill_w_valid
+  io.data_write.valid := refill_w_valid && !err
   io.data_write.bits.addr := refill_w_req.paddrWithVirtualAlias
   io.data_write.bits.way_en := refill_w_req.way_en
   io.data_write.bits.wmask := refill_w_req.wmask
   io.data_write.bits.data := refill_w_req.data
 
-  io.meta_write.valid := refill_w_valid
+  io.meta_write.valid := refill_w_valid && !err
   io.meta_write.bits.idx := idx
   io.meta_write.bits.way_en := refill_w_req.way_en
   io.meta_write.bits.meta := refill_w_req.meta
 
-  io.error_flag_write.valid := refill_w_valid
+  // error flag might be used by loadpipe, check this later
+  io.error_flag_write.valid := refill_w_valid && !err
   io.error_flag_write.bits.idx := idx
   io.error_flag_write.bits.way_en := refill_w_req.way_en
   io.error_flag_write.bits.error := refill_w_req.error
 
-  io.tag_write.valid := refill_w_valid
+  io.tag_write.valid := refill_w_valid && !err
   io.tag_write.bits.idx := idx
   io.tag_write.bits.way_en := refill_w_req.way_en
   io.tag_write.bits.tag := tag
 
-  io.store_resp.valid := refill_w_valid && refill_w_req.source === STORE_SOURCE.U
+  io.store_resp.valid := refill_w_valid && refill_w_req.source === STORE_SOURCE.U && !err
   io.store_resp.bits := DontCare
   io.store_resp.bits.miss := false.B
   io.store_resp.bits.replay := false.B
   io.store_resp.bits.id := refill_w_req.id
+  io.store_resp.bits.err := err
 
   io.release_wakeup.valid := refill_w_valid
   io.release_wakeup.bits := refill_w_req.miss_id
+
+  io.exception_write.valid := refill_w_valid && err && refill_w_req.source === STORE_SOURCE.U
+  io.exception_write.bits.paddr := refill_w_req.addr
+  io.exception_write.bits.wmask := refill_w_req.store_mask
+  io.exception_write.bits.data := refill_w_req.data
+  io.exception_write.bits.id   := refill_w_req.id
 }

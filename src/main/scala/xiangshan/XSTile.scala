@@ -6,7 +6,8 @@ import chisel3.util.{Valid, ValidIO}
 import freechips.rocketchip.diplomacy.{BundleBridgeSink, LazyModule, LazyModuleImp, LazyModuleImpLike, ResourceBinding}
 import freechips.rocketchip.interrupts.{IntSinkNode, IntSinkPortParameters, IntSinkPortSimple}
 import freechips.rocketchip.tile.{BusErrorUnit, BusErrorUnitParams, BusErrors}
-import freechips.rocketchip.tilelink.{BankBinder, TLBuffer, TLIdentityNode, TLNode, TLTempNode, TLXbar}
+import freechips.rocketchip.tilelink.{BankBinder, TLBuffer, TLIdentityNode, TLNode, TLTempNode, TLXbar, TLWidthWidget}
+
 import huancun.debug.TLLogger
 import huancun.{HCCacheParamsKey, HuanCun}
 import system.HasSoCParameter
@@ -50,6 +51,7 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
 
   val i_mmio_port = TLTempNode()
   val d_mmio_port = TLTempNode()
+  val d_exc_mmio_port = TLTempNode()
 
   busPMU := l1d_logger
   l1_xbar :=* busPMU
@@ -63,6 +65,8 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
 
   mmio_xbar := TLBuffer.chainNode(2) := i_mmio_port
   mmio_xbar := TLBuffer.chainNode(2) := d_mmio_port
+  mmio_xbar := TLBuffer.chainNode(2) := TLWidthWidget(64) := d_exc_mmio_port
+
   beu.node := TLBuffer.chainNode(1) := mmio_xbar
   mmio_port := TLBuffer() := mmio_xbar
 
@@ -128,6 +132,7 @@ class XSTile()(implicit p: Parameters) extends LazyModule
 
   misc.i_mmio_port := core.frontend.instrUncache.clientNode
   misc.d_mmio_port := core.memBlock.uncache.clientNode
+  misc.d_exc_mmio_port := core.memBlock.dcache.excClientNode
 
   lazy val module = new LazyModuleImp(this){
     val io = IO(new Bundle {

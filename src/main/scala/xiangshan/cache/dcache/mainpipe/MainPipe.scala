@@ -636,12 +636,14 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.store_replay_resp.bits.miss := true.B
   io.store_replay_resp.bits.replay := true.B
   io.store_replay_resp.bits.id := s2_req.id
+  io.store_replay_resp.bits.err := false.B
 
   io.store_hit_resp.valid := s3_valid && s3_store_can_go
   io.store_hit_resp.bits.data := DontCare
   io.store_hit_resp.bits.miss := false.B
   io.store_hit_resp.bits.replay := false.B
   io.store_hit_resp.bits.id := s3_req.id
+  io.store_hit_resp.bits.err := false.B
 
   io.release_update.valid := s3_valid && (s3_store_can_go || s3_amo_can_go) && s3_hit && update_data
   io.release_update.bits.addr := s3_req.addr

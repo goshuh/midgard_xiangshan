@@ -137,7 +137,9 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val deq = que.io.deq
 
     // random delay
-    val dly_vld = LFSR(32, deq.valid && !o.d.valid) <= dly_i
+    // val dly_vld = LFSR(32, deq.valid && !o.d.valid) <= dly_i
+    val dly_vld = Wire(Bool())
+    dly_vld := true.B
 
 
     //
