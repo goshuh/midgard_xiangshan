@@ -12,7 +12,7 @@ import  freechips.rocketchip.diplomacy._
 import  freechips.rocketchip.tilelink._
 
 
-class MidgardFSPTWWrapper(N: Int, P: Param)(implicit p: Parameters) extends LazyModule
+class FSPTWWrapper(N: Int, P: Param)(implicit p: Parameters) extends LazyModule
   with HasXSParameter {
 
   val node = TLClientNode(Seq(TLMasterPortParameters.v1(
@@ -29,7 +29,7 @@ class MidgardFSPTWWrapper(N: Int, P: Param)(implicit p: Parameters) extends Lazy
 
     val satp_i = IO(               Input(UInt(P.mcnBits.W)))
 
-    val vlb_i  = IO(Vec(N, Flipped(      new MidgardFSPTWIO(P))))
+    val vlb_i  = IO(Vec(N, Flipped(      new FSPTWIO(P))))
 
 
     // --------------------------

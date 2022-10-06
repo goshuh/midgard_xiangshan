@@ -45,7 +45,7 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
     val reset_vector = Input(UInt(PAddrBits.W))
     val fencei = Input(Bool())
     val ptw = new VectorTlbPtwIO(4)
-    val ptw_mg = new MidgardFSPTWIO(p(MidgardKey))
+    val ptw_mg = new FSPTWIO(p(MidgardKey))
     val backend = new FrontendToCtrlIO
     val sfence = Input(new SfenceBundle)
     val tlbCsr = Input(new TlbCsrBundle)
@@ -107,7 +107,7 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   icache.io.prefetch <> ftq.io.toPrefetch
 
   // midgard
-  val ivlb = Module(new MidgardFSVLBWrapper(4, true, 2, p(MidgardKey)))
+  val ivlb = Module(new FSVLBWrapper(4, true, 2, p(MidgardKey)))
 
   ivlb.sfence_i := io.sfence
   ivlb.csr_i    := tlbCsr

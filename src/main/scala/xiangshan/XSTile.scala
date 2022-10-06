@@ -51,23 +51,22 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
 
   val i_mmio_port = TLTempNode()
   val d_mmio_port = TLTempNode()
-  val d_exc_mmio_port = TLTempNode()
+  val e_mmio_port = TLTempNode()
 
   busPMU := l1d_logger
   l1_xbar :=* busPMU
 
   l2_binder match {
     case Some(binder) =>
-      memory_port := TLBuffer.chainNode(2) := TLClientsMerger() := TLXbar() :=* binder
+      memory_port := TLBuffer() := TLClientsMerger() := TLXbar() :=* binder
     case None =>
       memory_port := l1_xbar
   }
 
-  mmio_xbar := TLBuffer.chainNode(2) := i_mmio_port
-  mmio_xbar := TLBuffer.chainNode(2) := d_mmio_port
-  mmio_xbar := TLBuffer.chainNode(2) := TLWidthWidget(64) := d_exc_mmio_port
-
-  beu.node := TLBuffer.chainNode(1) := mmio_xbar
+  mmio_xbar := TLBuffer() := i_mmio_port
+  mmio_xbar := TLBuffer() := d_mmio_port
+  mmio_xbar := TLBuffer() := TLWidthWidget(64) := e_mmio_port
+  beu.node  := TLBuffer() := mmio_xbar
   mmio_port := TLBuffer() := mmio_xbar
 
   lazy val module = new LazyModuleImp(this){
@@ -132,7 +131,7 @@ class XSTile()(implicit p: Parameters) extends LazyModule
 
   misc.i_mmio_port := core.frontend.instrUncache.clientNode
   misc.d_mmio_port := core.memBlock.uncache.clientNode
-  misc.d_exc_mmio_port := core.memBlock.dcache.excClientNode
+  misc.e_mmio_port := core.memBlock.dcache.excClientNode
 
   lazy val module = new LazyModuleImp(this){
     val io = IO(new Bundle {

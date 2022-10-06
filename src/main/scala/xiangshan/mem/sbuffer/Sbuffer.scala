@@ -30,7 +30,7 @@ class SbufferFlushBundle extends Bundle {
 }
 
 trait HasSbufferConst extends HasXSParameter {
-  val EvictCycles = 1 << 20
+  val EvictCycles = 1 << 8
   val SbufferReplayDelayCycles = 16
   require(isPow2(EvictCycles))
   val EvictCountBits = log2Up(EvictCycles+1)
@@ -113,6 +113,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     val sqempty = Input(Bool())
     val flush = Flipped(new SbufferFlushBundle)
     val csrCtrl = Flipped(new CustomCSRCtrlIO)
+    val csr = new SbufferCSRIO
   })
 
   val dataModule = Module(new SbufferData)
@@ -247,10 +248,10 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   ) // slow to generate, for debug only
   val canInserts = (0 until EnsbufferWidth).map(i =>
     PriorityMuxDefault(if (i == 0) Seq(0.B -> 0.B) else (0 until i).map(j => sameTag(i)(j) -> remCanInsert(enbufferSelReg + j.U)), remCanInsert(enbufferSelReg + i.U))
-  ).map(_ && sbuffer_state =/= x_drain_sbuffer)
+  ).map(_ && (sbuffer_state =/= x_drain_sbuffer) && !io.csr.stall)
   val forward_need_uarch_drain = WireInit(false.B)
   val merge_need_uarch_drain = WireInit(false.B)
-  val do_uarch_drain = RegNext(forward_need_uarch_drain) || RegNext(RegNext(merge_need_uarch_drain))
+  val do_uarch_drain = RegNext(forward_need_uarch_drain) || RegNext(RegNext(merge_need_uarch_drain)) || io.csr.stall && !io.csr.empty
   XSPerfAccumulate("do_uarch_drain", do_uarch_drain)
 
   (0 until EnsbufferWidth).foreach(i =>
@@ -480,6 +481,9 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   io.dcache.req.bits.data  := data(evictionIdxReg).asUInt
   io.dcache.req.bits.mask  := mask(evictionIdxReg).asUInt
   io.dcache.req.bits.id := evictionIdxReg
+
+  io.csr.expt  := false.B
+  io.csr.empty := sbuffer_empty
 
   when (io.dcache.req.fire()) {
     assert(!(io.dcache.req.bits.vaddr === 0.U))

@@ -340,7 +340,6 @@ class ExternalInterruptIO(implicit p: Parameters) extends XSBundle {
   val meip = Input(Bool())
   val seip = Input(Bool())
   val debug = Input(Bool())
-  val sbip = Input(Bool()) // store buffer interrupt pending
 }
 
 class CSRSpecialIO(implicit p: Parameters) extends XSBundle {
@@ -471,6 +470,12 @@ class MemPredUpdateReq(implicit p: Parameters) extends XSBundle  {
   // by default, ldpc/stpc should be xor folded
   val ldpc = UInt(MemPredPCWidth.W)
   val stpc = UInt(MemPredPCWidth.W)
+}
+
+class SbufferCSRIO(implicit p: Parameters) extends XSBundle {
+  val expt  = Output(Bool())
+  val empty = Output(Bool())
+  val stall = Input (Bool())
 }
 
 class CustomCSRCtrlIO(implicit p: Parameters) extends XSBundle {

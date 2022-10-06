@@ -142,7 +142,6 @@ trait HaveSlaveAXI4Port {
     AXI4UserYanker(Some(1)) :=
     AXI4Fragmenter() :=
     AXI4Buffer() :=
-    AXI4Buffer() :=
     AXI4IdIndexer(1) :=
     l3FrontendAXI4Node
   errorDevice.node := l3_xbar
@@ -175,36 +174,34 @@ trait HaveAXI4MemPort {
 
   val mem_xbar = TLXbar()
 
-  val bmmu = if (p(MidgardKey).en) Some(LazyModule(new MidgardBSMMUWrapper())) else None
-  val berr = if (p(EInjectKey).en) Some(LazyModule(new EInject()            )) else None
+  val mmu = if (p(MidgardKey).en) Some(LazyModule(new BSMMUWrapper())) else None
+  val err = if (p(EInjectKey).en) Some(LazyModule(new EInject()     )) else None
 
   val mem_nodes =
-    Seq(mem_xbar, TLBuffer.chainNode(2)) ++
-      berr.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq()) ++
-      bmmu.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq(TLCacheCork())) ++
+    Seq(mem_xbar, TLBuffer()) ++
+      err.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq()) ++
+      mmu.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq(TLCacheCork())) ++
     Seq(TLWidthWidget(32), bankedNode)
 
   mem_nodes.reduce(_ :=* _)
 
   mem_xbar :=
     TLWidthWidget(8) :=
-    TLBuffer.chainNode(3, name = Some("PeripheralXbar_to_MemXbar_buffer")) :=
+    TLBuffer() :=
     peripheralXbar
 
-  bmmu.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
-  berr.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
+  mmu.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
+  err.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
 
   memAXI4SlaveNode :=
     AXI4Buffer() :=
-    AXI4Buffer() :=
-    AXI4Buffer() :=
-    AXI4IdIndexer(idBits = 14) :=
+    AXI4IdIndexer(idBits = 4) :=
     AXI4UserYanker() :=
     AXI4Deinterleaver(L3BlockSize) :=
     TLToAXI4() :=
-    TLSourceShrinker(64) :=
+    TLSourceShrinker(16) :=
     TLWidthWidget(L3OuterBusWidth / 8) :=
-    TLBuffer.chainNode(2) :=
+    TLBuffer() :=
     mem_xbar
 
   val memory = InModuleBody {
@@ -255,13 +252,10 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
   peripheralNode :=
     AXI4IdIndexer(idBits = 2) :=
     AXI4Buffer() :=
-    AXI4Buffer() :=
-    AXI4Buffer() :=
-    AXI4Buffer() :=
     AXI4UserYanker() :=
     AXI4Deinterleaver(8) :=
     TLToAXI4() :=
-    TLBuffer.chainNode(3) :=
+    TLBuffer() :=
     peripheralXbar
 
   val peripheral = InModuleBody {
@@ -291,7 +285,7 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
   }
 
   for(port <- peripheral_ports) {
-    peripheralXbar := TLBuffer.chainNode(2, Some("L2_to_L3_peripheral_buffer")) := port
+    peripheralXbar := TLBuffer() := port
   }
 
   for ((core_out, i) <- core_to_l3_ports.zipWithIndex){
@@ -300,7 +294,7 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
       TLBuffer() :=
       core_out
   }
-  l3_banked_xbar := TLBuffer.chainNode(2) := l3_xbar
+  l3_banked_xbar := TLBuffer() := l3_xbar
 
   val clint = LazyModule(new CLINT(CLINTParams(0x38000000L), 8))
   clint.node := peripheralXbar
@@ -335,7 +329,7 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
 
   val pma = LazyModule(new TLPMA)
   pma.node := 
-    TLBuffer.chainNode(4) :=
+    TLBuffer() :=
     peripheralXbar
 
   lazy val module = new LazyModuleImp(this){

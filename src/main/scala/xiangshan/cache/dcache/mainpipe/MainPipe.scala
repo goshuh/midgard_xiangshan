@@ -687,7 +687,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.meta_write.bits.way_en := s3_way_en
   io.meta_write.bits.meta.coh := new_coh
 
-  io.error_flag_write.valid := s3_fire && update_meta && s3_l2_error
+  io.error_flag_write.valid := s3_fire && update_meta && !s3_l2_error
   io.error_flag_write.bits.idx := s3_idx
   io.error_flag_write.bits.way_en := s3_way_en
   io.error_flag_write.bits.error := s3_l2_error

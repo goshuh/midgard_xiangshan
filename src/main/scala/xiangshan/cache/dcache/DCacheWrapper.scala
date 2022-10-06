@@ -412,7 +412,7 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val lsu = new DCacheToLsuIO
   val csr = new L1CacheToCsrIO
   val error = new L1CacheErrorInfo
-  val sbip = Output(Bool())
+  val sb_expt  = Output(Bool())
   val mshrFull = Output(Bool())
 }
 
@@ -434,7 +434,7 @@ class DCache()(implicit p: Parameters) extends LazyModule with HasDCacheParamete
   val excClientParameters = TLMasterPortParameters.v1(
     Seq(TLMasterParameters.v1(
       name = "exception handler",
-      sourceId = IdRange(100, 101),
+      sourceId = IdRange(0, 1),
     )),
   )
 
@@ -487,7 +487,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   missQueue.io.hartId := io.hartId
   exceptionPipe.io.hartId := io.hartId
-  io.sbip := exceptionPipe.io.sbip
+  io.sb_expt := exceptionPipe.io.sb_expt
 
   val errors = ldu.map(_.io.error) ++ // load error
     Seq(mainPipe.io.error) // store / misc error 

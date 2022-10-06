@@ -56,12 +56,13 @@ class EInject(implicit p: Parameters) extends LazyModule {
   val ctl_node = TLManagerNode(
                    Seq(TLSlavePortParameters.v1(
                      Seq(TLSlaveParameters.v1(
-                       address         = Seq(AddressSet(P.ctlBase, P.ctlSize)),
-                       regionType      = RegionType.UNCACHED,
-                       supportsGet     = TransferSizes(1, 8),
-                       supportsPutFull = TransferSizes(1, 8),
-                       fifoId          = Some(0),
-                       resources       = ctl_dev.reg)),
+                       address            = Seq(AddressSet(P.ctlBase, P.ctlSize)),
+                       regionType         = RegionType.UNCACHED,
+                       supportsGet        = TransferSizes(1, 8),
+                       supportsPutFull    = TransferSizes(1, 8),
+                       supportsPutPartial = TransferSizes(1, 8),
+                       fifoId             = Some(0),
+                       resources          = ctl_dev.reg)),
                      beatBytes = 8)))
 
   val adp_node = TLAdapterNode(

@@ -12,7 +12,7 @@ import  freechips.rocketchip.diplomacy._
 import  freechips.rocketchip.tilelink._
 
 
-class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
+class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
   val Q = p(MidgardKey)
 
   val ctl_node = TLManagerNode(
@@ -33,7 +33,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
         clients = cp.clients.map { c =>
           c.v1copy(
             supportsProbe = TransferSizes.none,
-            sourceId      = IdRange(0, if (Q.bsSkip) 1 << (log2Ceil(c.sourceId.end + Q.deqWays) + 1) else Q.mrqWays))
+            sourceId      = IdRange(0, if (Q.bsSkip) c.sourceId.end else Q.mrqWays))
         })
     },
     managerFn = { mp =>
@@ -49,7 +49,7 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
             mayDenyGet       = true,
             mayDenyPut       = true)
         },
-        endSinkId = if (Q.bsSkip) mp.endSinkId + Q.deqWays else Q.mrqWays,
+        endSinkId = if (Q.bsSkip) mp.endSinkId.max(1) else Q.mrqWays,
         beatBytes = 64)
     })
 
@@ -70,10 +70,9 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     // inst
 
     val N = ie.bundle.sourceBits
-    val M = if (Q.bsSkip) N - 1 else N
+    val M = ie.client.clients.head.sourceId.end
 
-    val P = Q.copy(llcIdx  = if (Q.bsSkip) N      else N + 1,
-                   mrqWays = if (Q.bsSkip) 1 << N else Q.mrqWays)
+    val P = Q.copy(llcIdx = N)
 
     val u_mmu = Module(new backside.MMU(P))
 
@@ -261,12 +260,14 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val chc_cev_req_raw = i.c.bits.opcode === TLMessages.Release
     val chc_dev_req_raw = i.c.bits.opcode === TLMessages.ReleaseData
 
-    // encoding: 0: prb, 1: inv
+    // encoding doesn't work
+    val chc_sel_inv = dontTouch(Wire(Bool()))
+
     val cha_acq_req = i.a.valid && cha_acq_req_raw
-    val chc_mis_req = i.c.valid && chc_mis_req_raw && !i.c.bits.source(0)
-    val chc_hit_req = i.c.valid && chc_hit_req_raw && !i.c.bits.source(0)
-    val chc_inv_req = i.c.valid && chc_mis_req_raw &&  i.c.bits.source(0)
-    val chc_wrb_req = i.c.valid && chc_hit_req_raw &&  i.c.bits.source(0)
+    val chc_mis_req = i.c.valid && chc_mis_req_raw && !chc_sel_inv
+    val chc_hit_req = i.c.valid && chc_hit_req_raw && !chc_sel_inv
+    val chc_inv_req = i.c.valid && chc_mis_req_raw &&  chc_sel_inv
+    val chc_wrb_req = i.c.valid && chc_hit_req_raw &&  chc_sel_inv
     val chc_cev_req = i.c.valid && chc_cev_req_raw
     val chc_dev_req = i.c.valid && chc_dev_req_raw
 
@@ -294,10 +295,12 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     chb_inv_gnt := i.b.ready
     chb_prb_gnt := chb_inv_gnt && !chb_inv_req
 
+    chc_sel_inv := Src(i.b.fire, i.c.fire, chb_inv_req)
+
     i.b.valid   := chb_inv_req || chb_prb_req
     i.b.bits    := chb_inv_req ??
                        ie.Probe(inv_mcn_q ## 0.U(P.clWid.W),
-                                1.U,
+                                0.U,
                                 P.clWid.U,
                                 TLPermissions.toN)._2 ::
                        ie.Probe(prb_req.bits.mcn ## 0.U(P.clWid.W),
@@ -306,18 +309,20 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                 TLPermissions.toT)._2
 
     // c channel
-    i.c.ready   := chc_mis_req_raw && (i.c.bits.source(0) ?? true.B      :: prb_resp.ready) ||
-                   chc_hit_req_raw && (i.c.bits.source(0) ?? chc_wrb_gnt :: prb_resp.ready) ||
+    i.c.ready   := chc_mis_req_raw && (chc_sel_inv ?? true.B      :: prb_resp.ready) ||
+                   chc_hit_req_raw && (chc_sel_inv ?? chc_wrb_gnt :: prb_resp.ready) ||
                    chc_cev_req_raw &&  chc_cev_gnt ||
                    chc_dev_req_raw &&  chc_dev_gnt
 
-    chc_inv     := i.c.fire && (chc_mis_req_raw || chc_hit_req_raw) && i.c.bits.source(0)
+    chc_inv     := i.c.fire && chc_sel_inv && (chc_mis_req_raw || chc_hit_req_raw)
 
     // d channel
     chc_cev_gnt := i.d.ready
 
     // priority: cev/dev > acq
-    val chd_ack_req = llc_resp.valid && llc_resp.bits.idx(M)
+    val llc_resp_sel_chd = dontTouch(Wire(Bool()))
+
+    val chd_ack_req = llc_resp.valid && llc_resp_sel_chd
     val chd_ack_gnt = chc_cev_gnt && !chc_cev_req
 
     val chd_sel_dev = chd_ack_req && !llc_resp.bits.rnw
@@ -328,11 +333,11 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                      P.clWid.U,
                                      false.B) ::
                    chd_sel_dev ??
-                       ie.ReleaseAck(llc_resp.bits.idx(M.W),
+                       ie.ReleaseAck(llc_resp.bits.idx,
                                      P.clWid.U,
                                      llc_resp.bits.err) ::
-                       ie.Grant(llc_resp.bits.idx(M.W),
-                                llc_resp.bits.idx(M.W),
+                       ie.Grant(if (P.bsSkip) 0.U else llc_resp.bits.idx,
+                                llc_resp.bits.idx,
                                 P.clWid.U,
                                 TLPermissions.toT,
                                 llc_resp.bits.data,
@@ -352,29 +357,38 @@ class MidgardBSMMUWrapper(implicit p: Parameters) extends LazyModule{
     chc_dev_gnt := chc_wrb_gnt && !chc_wrb_req
     cha_acq_gnt := chc_dev_gnt && !chc_dev_req
 
-    val llc_sel_chc = chc_dev_req ||  chc_wrb_req
-    val llc_sel_ack = chc_dev_req && !chc_wrb_req
+    val llc_sel_chc = chc_dev_req || chc_wrb_req
 
     llc_req.valid  := llc_sel_chc || cha_acq_req
     llc_req.bits   := llc_sel_chc ??
                           backside.MemReq(P,
-                                          llc_sel_ack ## i.c.bits.source(M := 0),
+                                          i.c.bits.source,
                                           false.B,
                                           i.c.bits.address(P.maBits := P.clWid),
                                           0.U,
                                           i.c.bits.data,
                                           P.llcIdx) ::
                           backside.MemReq(P,
-                                          true.B ## i.a.bits.source(M := 0),
+                                          i.a.bits.source,
                                           true.B,
                                           i.a.bits.address(P.maBits := P.clWid),
                                           0.U,
                                           0.U,
                                           P.llcIdx)
 
+    val llc_req_sel_chd = chc_dev_req && chc_dev_gnt ||
+                          cha_acq_req && cha_acq_gnt
+
+    llc_resp_sel_chd := OrM(Dec(llc_resp.bits.idx)(M.W),
+                            Seq.tabulate(M) { i =>
+                              Src(llc_req.fire  && (llc_req.bits.idx  === i.U),
+                                  llc_resp.fire && (llc_resp.bits.idx === i.U),
+                                  llc_req_sel_chd)
+                            })
+
     // llc resp
-    llc_resp.ready := llc_resp.bits.idx(M) && chd_ack_gnt ||
-                     !llc_resp.bits.idx(M)
+    llc_resp.ready := llc_resp_sel_chd && chd_ack_gnt ||
+                     !llc_resp_sel_chd
 
     // prb req
     prb_req.ready  := chb_prb_gnt

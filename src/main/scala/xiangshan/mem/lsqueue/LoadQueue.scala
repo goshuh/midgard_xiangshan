@@ -287,6 +287,7 @@ class LoadQueue(implicit p: Parameters) extends XSModule
       miss(i) := false.B
       when(io.refill.bits.error) {
         error(i) := true.B
+        uop(i).cf.exceptionVec(loadAccessFault) := true.B
       }
     }
   })

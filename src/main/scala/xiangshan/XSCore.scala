@@ -140,7 +140,7 @@ abstract class XSCoreBase()(implicit p: config.Parameters) extends LazyModule
   // outer facing nodes
   val frontend = LazyModule(new Frontend())
   val ptw = LazyModule(new L2TLBWrapper())
-  val ptw_mg = LazyModule(new MidgardFSPTWWrapper(2, p(MidgardKey)))
+  val ptw_mg = LazyModule(new FSPTWWrapper(2, p(MidgardKey)))
   val ptw_xbar = LazyModule(new TLXbar())
   val ptw_to_l2_buffer = LazyModule(new TLBuffer)
   val csrOut = BundleBridgeSource(Some(() => new DistributedCSRIO()))
@@ -396,7 +396,8 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   csrioIn.externalInterrupt.meip := outer.plic_int_sink.in.head._1(0)
   csrioIn.externalInterrupt.seip := outer.plic_int_sink.in.last._1(0)
   csrioIn.externalInterrupt.debug := outer.debug_int_sink.in.head._1(0)
-  csrioIn.externalInterrupt.sbip := memBlock.io.sbip
+
+  csrioIn.sb <> memBlock.io.sb_csr
 
   csrioIn.distributedUpdate(0).w.valid := memBlock.io.csrUpdate.w.valid
   csrioIn.distributedUpdate(0).w.bits := memBlock.io.csrUpdate.w.bits

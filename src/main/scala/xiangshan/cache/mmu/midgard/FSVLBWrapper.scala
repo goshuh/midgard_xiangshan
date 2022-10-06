@@ -12,13 +12,13 @@ import  xiangshan.backend.fu.util._
 import  chipsalliance.rocketchip.config._
 
 
-class MidgardFSPTWIO(P: Param) extends Bundle {
+class FSPTWIO(P: Param) extends Bundle {
   val ptw_req_o  =         Decoupled(new frontside.VLBReq(P))
   val ptw_resp_i = Flipped(    Valid(new frontside.VMA(P)))
 }
 
 
-class MidgardFSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Parameters) extends Module
+class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Parameters) extends Module
   with HasXSParameter
   with HasCSRConst {
 

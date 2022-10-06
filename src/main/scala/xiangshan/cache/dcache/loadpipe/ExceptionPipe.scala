@@ -3,13 +3,13 @@ package xiangshan.cache
 import chipsalliance.rocketchip.config.Parameters
 import chisel3._
 import chisel3.util._
-import  midgard._
-import  midgard.util._
+import midgard._
+import midgard.util._
 import freechips.rocketchip.tilelink._
 
 class ExceptionPipeReq(implicit p: Parameters) extends DCacheBundle {
   val paddr = Bits(PAddrBits.W)
-  val wmask = Bits(DCacheBanks.W)
+  val wmask = Bits(cfg.blockBytes.W)
   val data  = Vec (DCacheBanks, Bits(DCacheSRAMRowBits.W))
   val id    = UInt(reqIdWidth.W)
 }
@@ -23,7 +23,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
     val resp        =         ValidIO     (new DCacheLineResp)
     val mem_acquire =         DecoupledIO (new TLBundleA(edge.bundle))
     val mem_grant   = Flipped(DecoupledIO (new TLBundleD(edge.bundle)))
-    val sbip        =         Output      (new Bool()) // store buffer interrupt pending
+    val sb_expt     =         Output      (new Bool()) // store buffer interrupt pending
   })
 
   val s_idle :: s_write_data_req :: s_write_data_resp :: s_write_meta_req :: s_write_meta_resp :: s_send_resp :: Nil = Enum(6)
@@ -40,7 +40,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
   io.mem_acquire.valid  := false.B
   io.mem_acquire.bits   := DontCare
   io.mem_grant.ready    := false.B
-  io.sbip               := false.B
+  io.sb_expt            := false.B
 
 
   // --------------------------------------------
@@ -76,9 +76,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
 
       // also prepare data for next payload..
       val req_addr      = req.paddr.asTypeOf(UInt(64.W))
-      val nth_8B        = req_addr(3,0)
-      val req_bit_mask  = Fill(64,0.B) | (req.wmask << (nth_8B*8.U))  //indicates which byte in a 64B cacheline is being written
-      req_meta         := Cat(req_bit_mask, req_addr)
+      req_meta         := Cat(req.wmask, req_addr)
     }
 
     is (s_write_meta_req) {
@@ -108,7 +106,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
       io.resp.bits.replay := false.B
       io.resp.bits.id     := req.id
       io.resp.bits.err    := false.B
-      io.sbip             := true.B
+      io.sb_expt          := true.B
       state               := s_idle
     }
   }

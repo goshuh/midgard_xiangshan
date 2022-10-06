@@ -28,7 +28,7 @@ class RefillPipeReq(implicit p: Parameters) extends DCacheBundle {
   val data = Vec(DCacheBanks, UInt(DCacheSRAMRowBits.W))
   val meta = new Meta
   val alias = UInt(2.W) // TODO: parameterize
-  val store_mask = UInt(DCacheBanks.W)
+  val store_mask = UInt(cfg.blockBytes.W)
 
   val miss_id = UInt(log2Up(cfg.nMissEntries).W)
 
@@ -55,12 +55,6 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
     val exception_write = DecoupledIO(new ExceptionPipeReq)
   })
 
-  val einject = Module(new dcache.EInject(PAddrBits))
-
-  einject.io.i_addr.valid := io.req.valid
-  einject.io.i_addr.bits := io.req.bits.addr
-  val err = einject.io.o_err
-
   // Assume that write in refill pipe is always ready
   assert(RegNext(io.data_write.ready))
   assert(RegNext(io.meta_write.ready))
@@ -75,6 +69,7 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
 
   val idx = refill_w_req.idx
   val tag = get_tag(refill_w_req.addr)
+  val err = refill_w_req.error
 
   io.data_write.valid := refill_w_valid && !err
   io.data_write.bits.addr := refill_w_req.paddrWithVirtualAlias

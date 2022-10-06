@@ -27,7 +27,7 @@ import xiangshan.backend.exu.StdExeUnit
 import xiangshan.backend.fu._
 import xiangshan.backend.rob.RobLsqIO
 import xiangshan.cache._
-import xiangshan.cache.mmu.{VectorTlbPtwIO, TLBNonBlock, TlbReplace, MidgardFSPTWIO, MidgardFSVLBWrapper}
+import xiangshan.cache.mmu.{VectorTlbPtwIO, TLBNonBlock, TlbReplace, FSPTWIO, FSVLBWrapper}
 import xiangshan.mem._
 import system._
 
@@ -74,12 +74,12 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val writeback = Vec(exuParameters.LsExuCnt + exuParameters.StuCnt, DecoupledIO(new ExuOutput))
     val delayedLoadError = Vec(exuParameters.LduCnt, Output(Bool()))
     val otherFastWakeup = Vec(exuParameters.LduCnt + 2 * exuParameters.StuCnt, ValidIO(new MicroOp))
-    val sbip  = Output(new Bool()) // store buffer interrupt pending
+    val sb_csr = new SbufferCSRIO
     // misc
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
     val ptw = new VectorTlbPtwIO(exuParameters.LduCnt + exuParameters.StuCnt)
-    val ptw_mg = new MidgardFSPTWIO(p(MidgardKey))
+    val ptw_mg = new FSPTWIO(p(MidgardKey))
     val sfence = Input(new SfenceBundle)
     val tlbCsr = Input(new TlbCsrBundle)
     val fenceToSbuffer = Flipped(new FenceToSbuffer)
@@ -120,7 +120,6 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     io.error.report_to_beu := false.B
     io.error.valid := false.B
   }
-  io.sbip := dcache.io.sbip
 
   val loadUnits = Seq.fill(exuParameters.LduCnt)(Module(new LoadUnit))
   val storeUnits = Seq.fill(exuParameters.StuCnt)(Module(new StoreUnit))
@@ -166,6 +165,11 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   lsq.io.hartId := io.hartId
   sbuffer.io.hartId := io.hartId
   atomicsUnit.io.hartId := io.hartId
+
+  io.sb_csr.expt  := dcache.io.sb_expt
+  io.sb_csr.empty := RegNext(sbuffer.io.csr.empty, true.B)
+
+  sbuffer.io.csr.stall := RegNext(io.sb_csr.stall && !io.sb_csr.expt, true.B)
 
   // dtlb
   val sfence = RegNext(RegNext(io.sfence))
@@ -240,7 +244,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   dtlb.map(_.ptw_replenish := pmp_check_ptw.io.resp)
 
   // midgard
-  val dvlb = Module(new MidgardFSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, false, 0, p(MidgardKey)))
+  val dvlb = Module(new FSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, false, 0, p(MidgardKey)))
 
   dvlb.sfence_i := sfence
   dvlb.csr_i    := tlbcsr
