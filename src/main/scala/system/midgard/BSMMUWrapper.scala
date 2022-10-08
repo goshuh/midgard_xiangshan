@@ -49,8 +49,9 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
             mayDenyGet       = true,
             mayDenyPut       = true)
         },
-        endSinkId = if (Q.bsSkip) mp.endSinkId.max(1) else Q.mrqWays,
-        beatBytes = 64)
+        endSinkId  = if (Q.bsSkip) mp.endSinkId.max(1) else Q.mrqWays,
+        beatBytes  = 64,
+        minLatency = 0)
     })
 
   lazy val module = new LazyModuleImp(this) {

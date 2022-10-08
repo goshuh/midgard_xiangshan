@@ -98,7 +98,6 @@ class SRAMTemplate[T <: Data](gen: T, set: Int, way: Int = 1,
   })
 
   val wordType = UInt(gen.getWidth.W)
-  val array = SyncReadMem(set, Vec(way, wordType))
   val (resetState, resetSet) = (WireInit(false.B), WireInit(0.U))
 
   if (shouldReset) {
@@ -116,9 +115,20 @@ class SRAMTemplate[T <: Data](gen: T, set: Int, way: Int = 1,
   val setIdx = Mux(resetState, resetSet, io.w.req.bits.setIdx)
   val wdata = VecInit(Mux(resetState, 0.U.asTypeOf(Vec(way, gen)), io.w.req.bits.data).map(_.asTypeOf(wordType)))
   val waymask = Mux(resetState, Fill(way, "b1".U), io.w.req.bits.waymask.getOrElse("b1".U))
-  when (wen) { array.write(setIdx, wdata, waymask.asBools) }
+  val raw_rdata = Wire(Vec(way, wordType))
 
-  val raw_rdata = array.read(io.r.req.bits.setIdx, realRen)
+  huancun.utils.InstantiateSRAM(singlePort,
+                                log2Ceil(set),
+                                way * gen.getWidth,
+                                way,
+                                clock,
+                                realRen,
+                                io.r.req.bits.setIdx,
+                                raw_rdata,
+                                wen,
+                                setIdx,
+                                wdata,
+                                waymask)
 
   // bypass for dual-port SRAMs
   require(!bypassWrite || bypassWrite && !singlePort)
@@ -141,8 +151,7 @@ class SRAMTemplate[T <: Data](gen: T, set: Int, way: Int = 1,
   }
 
   // hold read data for SRAMs
-  val rdata = (if (holdRead) HoldUnless(mem_rdata, RegNext(realRen))
-              else mem_rdata).map(_.asTypeOf(gen))
+  val rdata = mem_rdata.map(_.asTypeOf(gen))
 
   io.r.resp.data := VecInit(rdata)
   io.r.req.ready := !resetState && (if (singlePort) !wen else true.B)
