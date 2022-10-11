@@ -27,13 +27,18 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                        resources          = new SimpleDevice("midgard", Seq("midgard.bmmu")).reg)),
                      beatBytes = 64)))
 
+  // only support llc as the single master
+  val llc_end_idx = p(SoCParamsKey).L3CacheParamsOpt.get.mshrs + 2
+
   val adp_node = TLAdapterNode(
     clientFn  = { cp =>
       cp.v1copy(
         clients = cp.clients.map { c =>
+          require(c.sourceId.end == llc_end_idx)
+
           c.v1copy(
             supportsProbe = TransferSizes.none,
-            sourceId      = IdRange(0, if (Q.bsSkip) c.sourceId.end else Q.mrqWays))
+            sourceId      = IdRange(0, if (Q.bsSkip) llc_end_idx else Q.mrqWays))
         })
     },
     managerFn = { mp =>
@@ -49,7 +54,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
             mayDenyGet       = true,
             mayDenyPut       = true)
         },
-        endSinkId  = if (Q.bsSkip) mp.endSinkId.max(1) else Q.mrqWays,
+        endSinkId  = if (Q.bsSkip) llc_end_idx else Q.mrqWays,
         beatBytes  = 64,
         minLatency = 0)
     })
@@ -73,7 +78,8 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val N = ie.bundle.sourceBits
     val M = ie.client.clients.head.sourceId.end
 
-    val P = Q.copy(llcIdx = N)
+    val P = Q.copy(llcIdx  = N,
+                   mrqWays = if (Q.bsSkip) 1 << N else Q.mrqWays)
 
     val u_mmu = Module(new backside.MMU(P))
 
@@ -230,7 +236,30 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     //
     // mem
 
-    o.a.valid   := mem_req.valid
+    val mem_req_qual = dontTouch(Wire(Bool()))
+
+    if (P.bsSkip) {
+      val mem_scb_q  = dontTouch(Wire(Vec(M, Bool())))
+
+      val mem_dec_req  = Dec(o.a.bits.source)
+      val mem_dec_resp = Dec(o.d.bits.source)
+
+      for (i <- 0 until M) {
+        val set = o.a.fire && mem_dec_req (i)
+        val clr = o.d.fire && mem_dec_resp(i)
+
+        mem_scb_q(i) := RegEnable(set && !clr,
+                                  false.B,
+                                  set ||  clr)
+      }
+
+      mem_req_qual := Non(mem_scb_q.U & mem_dec_req)
+
+    } else {
+      mem_req_qual := false.B
+    }
+
+    o.a.valid   := mem_req.valid && mem_req_qual
     o.a.bits    := mem_req.bits.rnw ??
                        oe.Get(mem_req.bits.idx,
                               mem_req.bits.pcn ## 0.U(P.clWid.W),
@@ -240,7 +269,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                               P.clWid.U,
                               mem_req.bits.data)._2
 
-    mem_req.ready  := o.a.ready
+    mem_req.ready  := o.a.ready  && mem_req_qual
 
     mem_resp.valid := o.d.valid
     mem_resp.bits  := backside.MemResp(P,
@@ -272,6 +301,8 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val chc_cev_req = i.c.valid && chc_cev_req_raw
     val chc_dev_req = i.c.valid && chc_dev_req_raw
 
+    val chc_prb = i.c.fire && (chc_mis_req_raw || chc_hit_req_raw)
+
     // no other possibilities
     assert(i.a.valid ->  cha_acq_req_raw)
     assert(i.c.valid -> (chc_mis_req_raw ||
@@ -296,7 +327,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     chb_inv_gnt := i.b.ready
     chb_prb_gnt := chb_inv_gnt && !chb_inv_req
 
-    chc_sel_inv := Src(i.b.fire, i.c.fire, chb_inv_req)
+    chc_sel_inv := Src(i.b.fire, chc_prb, chb_inv_req)
 
     i.b.valid   := chb_inv_req || chb_prb_req
     i.b.bits    := chb_inv_req ??
@@ -315,7 +346,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                    chc_cev_req_raw &&  chc_cev_gnt ||
                    chc_dev_req_raw &&  chc_dev_gnt
 
-    chc_inv     := i.c.fire && chc_sel_inv && (chc_mis_req_raw || chc_hit_req_raw)
+    chc_inv     := chc_prb && chc_sel_inv
 
     // d channel
     chc_cev_gnt := i.d.ready
@@ -337,7 +368,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                        ie.ReleaseAck(llc_resp.bits.idx,
                                      P.clWid.U,
                                      llc_resp.bits.err) ::
-                       ie.Grant(if (P.bsSkip) 0.U else llc_resp.bits.idx,
+                       ie.Grant(llc_resp.bits.idx,
                                 llc_resp.bits.idx,
                                 P.clWid.U,
                                 TLPermissions.toT,

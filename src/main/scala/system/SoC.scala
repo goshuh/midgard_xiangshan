@@ -250,7 +250,7 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
   )))
 
   peripheralNode :=
-    AXI4IdIndexer(idBits = 2) :=
+    AXI4IdIndexer(idBits = 3) :=
     AXI4Buffer() :=
     AXI4UserYanker() :=
     AXI4Deinterleaver(8) :=
