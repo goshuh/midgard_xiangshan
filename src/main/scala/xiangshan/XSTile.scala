@@ -46,7 +46,7 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
     new XSL1BusErrors(), BusErrorUnitParams(0x38010000 + coreParams.HartId * 0x1000)
   ))
   val busPMU = BusPerfMonitor(enable = !debugOpts.FPGAPlatform)
-  val l1d_logger = TLLogger(s"L2_L1D_${coreParams.HartId}", !debugOpts.FPGAPlatform)
+  val l1d_logger = TLLogger(s"L2_L1D_${coreParams.HartId}", debugOpts.EnableTLLogger)
   val l2_binder = coreParams.L2CacheParamsOpt.map(_ => BankBinder(coreParams.L2NBanks, 64))
 
   val i_mmio_port = TLTempNode()
@@ -110,14 +110,14 @@ class XSTile()(implicit p: Parameters) extends LazyModule
 
   val l1i_to_l2_buffer = LazyModule(new TLBuffer)
   misc.busPMU :=
-    TLLogger(s"L2_L1I_${coreParams.HartId}", !debugOpts.FPGAPlatform) :=
+    TLLogger(s"L2_L1I_${coreParams.HartId}", debugOpts.EnableTLLogger) :=
     l1i_to_l2_buffer.node :=
     core.frontend.icache.clientNode
 
   val ptw_to_l2_bufferOpt = if (!coreParams.softPTW) {
     val buffer = LazyModule(new TLBuffer)
     misc.busPMU :=
-      TLLogger(s"L2_PTW_${coreParams.HartId}", !debugOpts.FPGAPlatform) :=
+      TLLogger(s"L2_PTW_${coreParams.HartId}", debugOpts.EnableTLLogger) :=
       buffer.node :=
       core.ptw_to_l2_buffer.node
     Some(buffer)

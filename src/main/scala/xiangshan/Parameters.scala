@@ -266,6 +266,7 @@ case class DebugOptions
   AlwaysBasicDiff: Boolean = true,
   EnableDebug: Boolean = false,
   EnablePerfDebug: Boolean = true,
+  EnableTLLogger: Boolean = false,
   UseDRAMSim: Boolean = false
 )
 

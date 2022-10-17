@@ -278,7 +278,7 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
   val l3_mem_pmu = BusPerfMonitor(enable = !debugOpts.FPGAPlatform)
 
   l3_in :*= TLEdgeBuffer(_ => true, Some("L3_in_buffer")) :*= l3_banked_xbar
-  bankedNode :*= TLLogger("MEM_L3", !debugOpts.FPGAPlatform) :*= l3_mem_pmu :*= l3_out
+  bankedNode :*= TLLogger("MEM_L3", debugOpts.EnableTLLogger) :*= l3_mem_pmu :*= l3_out
 
   if(soc.L3CacheParamsOpt.isEmpty){
     l3_out :*= l3_in
@@ -290,7 +290,7 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
 
   for ((core_out, i) <- core_to_l3_ports.zipWithIndex){
     l3_banked_xbar :=*
-      TLLogger(s"L3_L2_$i", !debugOpts.FPGAPlatform) :=*
+      TLLogger(s"L3_L2_$i", debugOpts.EnableTLLogger) :=*
       TLBuffer() :=
       core_out
   }
