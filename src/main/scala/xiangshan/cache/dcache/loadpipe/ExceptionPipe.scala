@@ -23,7 +23,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
     val resp        =         ValidIO     (new DCacheLineResp)
     val mem_acquire =         DecoupledIO (new TLBundleA(edge.bundle))
     val mem_grant   = Flipped(DecoupledIO (new TLBundleD(edge.bundle)))
-    val sb_expt     =         Output      (new Bool()) // store buffer interrupt pending
+    val dsf         =         Output      (new Bool()) // store buffer interrupt pending
   })
 
   val s_idle :: s_write_data_req :: s_write_data_resp :: s_write_meta_req :: s_write_meta_resp :: s_send_resp :: Nil = Enum(6)
@@ -40,7 +40,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
   io.mem_acquire.valid  := false.B
   io.mem_acquire.bits   := DontCare
   io.mem_grant.ready    := false.B
-  io.sb_expt            := false.B
+  io.dsf                := false.B
 
 
   // --------------------------------------------
@@ -106,7 +106,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
       io.resp.bits.replay := false.B
       io.resp.bits.id     := req.id
       io.resp.bits.err    := false.B
-      io.sb_expt          := true.B
+      io.dsf              := true.B
       state               := s_idle
     }
   }

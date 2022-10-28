@@ -119,8 +119,7 @@ class CSRFileIO(implicit p: Parameters) extends XSBundle {
   val memExceptionVAddr = Input(UInt(VAddrBits.W))
   // from outside cpu,externalInterrupt
   val externalInterrupt = new ExternalInterruptIO
-  // from/to sb
-  val sb = Flipped(new SbufferCSRIO)
+  val dsf = Flipped(new DSFIO())
   // TLB
   val tlb = Output(new TlbCsrBundle)
   // Debug Mode
@@ -674,7 +673,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     //--- Machine Trap Setup ---
     MaskedRegMap(Mstatus, mstatus, mstatusWMask, mstatusUpdateSideEffect, mstatusMask),
     MaskedRegMap(Misa, misa), // now MXL, EXT is not changeable
-    MaskedRegMap(Medeleg, medeleg, "hf3ff".U(XLEN.W)),
+    MaskedRegMap(Medeleg, medeleg, "hf00f3ff".U(XLEN.W)),
     MaskedRegMap(Mideleg, mideleg, "h222".U(XLEN.W)),
     MaskedRegMap(Mie, mie),
     MaskedRegMap(Mtvec, mtvec, mtvecMask, MaskedRegMap.NoSideEffect, mtvecMask),
@@ -932,10 +931,6 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
 
   XSDebug(io.in.valid && isEbreak, s"Debug Mode: an Ebreak is executed, ebreak cause exception ? ${ebreakCauseException}\n")
 
-  // delayed exception first as an interrupt
-  val hasSBIntr_q = Wire(Bool())
-  val hasSBIntr   = hasSBIntr_q && csrio.sb.empty
-
   /**
     * Exception and Intr
     */
@@ -951,7 +946,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   intrVecEnable.zip(ideleg.asBools).map{case(x,y) => x := priviledgedEnableDetect(y) && !disableInterrupt}
   val intrVec = Cat(debugIntr && !debugMode, (mie(11, 0) & mip.asUInt & intrVecEnable.asUInt))
   val intrBitSet = intrVec.orR
-  csrio.interrupt := intrBitSet || hasSBIntr
+  csrio.interrupt := intrBitSet || csrio.dsf.valid
   // Page 45 in RISC-V Privileged Specification
   // The WFI instruction can also be executed when interrupts are disabled. The operation of WFI
   // must be unaffected by the global interrupt bits in mstatus (MIE and SIE) and the delegation
@@ -964,8 +959,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
 
   // interrupts
   val intrNO = IntPriority.foldRight(0.U)((i: Int, sum: UInt) => Mux(intrVec(i), i.U, sum))
-  val hasIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt
-  val raiseIntr = hasIntr && !hasSBIntr // if store buffer interrupt, convert to exception
+  val raiseIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt && !csrio.dsf.valid
   val ivmEnable = tlbBundle.priv.imode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
   val iexceptionPC = Mux(ivmEnable, SignExt(csrio.exception.bits.uop.cf.pc, XLEN), csrio.exception.bits.uop.cf.pc)
   val dvmEnable = tlbBundle.priv.dmode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
@@ -973,14 +967,10 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   XSDebug(raiseIntr, "interrupt: pc=0x%x, %d\n", dexceptionPC, intrNO)
   val raiseDebugIntr = intrNO === IRQ_DEBUG.U && raiseIntr
 
-  // keep asserting until acknowledged by rob
-  hasSBIntr_q := RegNext(csrio.sb.expt || hasSBIntr_q && !hasIntr,
-                         false.B)
-
-  csrio.sb.stall := hasSBIntr_q
-
   // exceptions
-  val raiseException = csrio.exception.valid && (!csrio.exception.bits.isInterrupt || hasSBIntr)
+  val dsf_expt = csrio.exception.valid && csrio.exception.bits.isInterrupt && csrio.dsf.valid
+
+  val raiseException = csrio.exception.valid && !csrio.exception.bits.isInterrupt || dsf_expt
   val hasInstrPageFault = csrio.exception.bits.uop.cf.exceptionVec(instrPageFault) && raiseException
   val hasLoadPageFault = csrio.exception.bits.uop.cf.exceptionVec(loadPageFault) && raiseException
   val hasStorePageFault = csrio.exception.bits.uop.cf.exceptionVec(storePageFault) && raiseException
@@ -988,7 +978,10 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val hasLoadAddrMisaligned = csrio.exception.bits.uop.cf.exceptionVec(loadAddrMisaligned) && raiseException
   val hasInstrAccessFault = csrio.exception.bits.uop.cf.exceptionVec(instrAccessFault) && raiseException
   val hasLoadAccessFault = csrio.exception.bits.uop.cf.exceptionVec(loadAccessFault) && raiseException
-  val hasStoreAccessFault = (csrio.exception.bits.uop.cf.exceptionVec(storeAccessFault) || hasSBIntr) && raiseException
+  val hasStoreAccessFault = csrio.exception.bits.uop.cf.exceptionVec(storeAccessFault) && raiseException
+  val hasDelayedInstrFault = csrio.exception.bits.uop.cf.exceptionVec(delayedInstrFault) && raiseException
+  val hasDelayedLoadFault = csrio.exception.bits.uop.cf.exceptionVec(delayedLoadFault) && raiseException
+  val hasDelayedStoreFault = csrio.exception.bits.uop.cf.exceptionVec(delayedStoreFault) && raiseException || dsf_expt
   val hasbreakPoint = csrio.exception.bits.uop.cf.exceptionVec(breakPoint) && raiseException
   val hasSingleStep = csrio.exception.bits.uop.ctrl.singleStep && raiseException
   val hasTriggerHit = (csrio.exception.bits.uop.cf.trigger.hit) && raiseException
@@ -997,7 +990,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   XSDebug(hasTriggerHit, p"Debug Mode: trigger hit, is frontend? ${Binary(csrio.exception.bits.uop.cf.trigger.frontendHit.asUInt)} " +
     p"backend hit vec ${Binary(csrio.exception.bits.uop.cf.trigger.backendHit.asUInt)}\n")
 
-  val raiseExceptionVec = csrio.exception.bits.uop.cf.exceptionVec | Mux(hasStoreAccessFault, GenMask(storeAccessFault), 0.U).asBools
+  val raiseExceptionVec = Mux(dsf_expt, VecInit(GenMask(delayedStoreFault).asBools), csrio.exception.bits.uop.cf.exceptionVec)
   val regularExceptionNO = ExceptionNO.priorities.foldRight(0.U)((i: Int, sum: UInt) => Mux(raiseExceptionVec(i), i.U, sum))
   val exceptionNO = Mux(hasSingleStep || hasTriggerHit, 3.U, regularExceptionNO)
   val causeNO = (raiseIntr << (XLEN-1)).asUInt | Mux(raiseIntr, intrNO, exceptionNO)
@@ -1019,6 +1012,46 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     priviledgeMode
   )
 
+  val
+     (dsf_fsm_idle  ::
+      dsf_fsm_drain ::
+      dsf_fsm_req   ::
+      dsf_fsm_null) = Enum(3)
+
+  val dsf_fsm_q   = dontTouch(Wire(UInt(2.W)))
+  val dsf_fsm_en  = dontTouch(Wire(Bool()))
+  val dsf_fsm_nxt = dontTouch(Wire(UInt(2.W)))
+
+  dsf_fsm_en  := false.B
+  dsf_fsm_nxt := dsf_fsm_q
+
+  val dsf_taken = csrio.dsf.valid && raiseException && (exceptionNO === delayedStoreFault.U)
+
+  switch (dsf_fsm_q) {
+    is (dsf_fsm_idle) {
+      dsf_fsm_en  := csrio.dsf.expt
+      dsf_fsm_nxt := dsf_fsm_drain
+    }
+    is (dsf_fsm_drain) {
+      dsf_fsm_en  := csrio.dsf.empty
+      dsf_fsm_nxt := dsf_fsm_req
+    }
+    is (dsf_fsm_req) {
+      dsf_fsm_en  := dsf_taken
+      dsf_fsm_nxt := dsf_fsm_idle
+    }
+  }
+
+  dsf_fsm_q := RegEnable(dsf_fsm_nxt,
+                         dsf_fsm_idle,
+                         dsf_fsm_en)
+
+  val dsf_fsm_is_drain = dsf_fsm_q === dsf_fsm_drain
+  val dsf_fsm_is_req   = dsf_fsm_q === dsf_fsm_req
+
+  csrio.dsf.valid := dsf_fsm_is_req && (priviledgeMode === ModeU)
+  csrio.dsf.drain := dsf_fsm_is_drain || csrio.dsf.valid
+
   // mtval write logic
   // Due to timing reasons of memExceptionVAddr, we delay the write of mtval and stval
   val memExceptionAddr = SignExt(csrio.memExceptionVAddr, XLEN)
@@ -1030,7 +1063,10 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     hasLoadAccessFault,
     hasStoreAccessFault,
     hasLoadAddrMisaligned,
-    hasStoreAddrMisaligned
+    hasStoreAddrMisaligned,
+    hasDelayedInstrFault,
+    hasDelayedLoadFault,
+    hasDelayedStoreFault
   )).asUInt.orR
   when (RegNext(RegNext(updateTval))) {
       val tval = Mux(
@@ -1052,7 +1088,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val debugTrapTarget = Mux(!isEbreak && debugMode, 0x38020808.U, 0x38020800.U) // 0x808 is when an exception occurs in debug mode prog buf exec
   val deleg = Mux(raiseIntr, mideleg , medeleg)
   // val delegS = ((deleg & (1 << (causeNO & 0xf))) != 0) && (priviledgeMode < ModeM);
-  val delegS = deleg(causeNO(3,0)) && (priviledgeMode < ModeM)
+  val delegS = deleg(causeNO(4, 0)) && (priviledgeMode < ModeM)
   val clearTval = !updateTval || raiseIntr
   val isXRet = io.in.valid && func === CSROpType.jmp && !isEcall && !isEbreak
 
@@ -1078,7 +1114,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
       // cause the pc to be set to the address in the BASE field, whereas
       // interrupts cause the pc to be set to the address in the BASE field
       // plus four times the interrupt cause number.
-      Cat(tvecBase + Mux(tvec(0) && raiseIntr, causeNO(3, 0), 0.U), 0.U(2.W))
+      Cat(tvecBase + Mux(tvec(0) && raiseIntr, causeNO(4, 0), 0.U), 0.U(2.W))
   )), isXRetFlag || csrio.exception.valid)
 
   when (raiseExceptionIntr) {

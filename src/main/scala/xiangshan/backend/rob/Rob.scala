@@ -308,6 +308,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     val csr = new RobCSRIO
     val robFull = Output(Bool())
     val cpu_halt = Output(Bool())
+    val dsf = Input(Bool())
   })
 
   def selectWb(index: Int, func: Seq[ExuConfig] => Boolean): Seq[(Seq[ExuConfig], ValidIO[ExuOutput])] = {
@@ -486,8 +487,11 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   val deqDispatchData = dispatchDataRead(0)
   val debug_deqUop = debug_microOp(deqPtr.value)
 
+  // hack: no mmio when dsf happens
+  val intr_safe = interrupt_safe(deqPtr.value) || io.dsf
+
   val intrBitSetReg = RegNext(io.csr.intrBitSet)
-  val intrEnable = intrBitSetReg && !hasNoSpecExec && interrupt_safe(deqPtr.value)
+  val intrEnable = intrBitSetReg && !hasNoSpecExec && intr_safe
   val deqHasExceptionOrFlush = exceptionDataRead.valid && exceptionDataRead.bits.robIdx === deqPtr
   val deqHasException = deqHasExceptionOrFlush && (exceptionDataRead.bits.exceptionVec.asUInt.orR ||
     exceptionDataRead.bits.singleStep || exceptionDataRead.bits.trigger.hit)
@@ -697,7 +701,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   deqPtrGenModule.io.exception_state := exceptionDataRead
   deqPtrGenModule.io.intrBitSetReg := intrBitSetReg
   deqPtrGenModule.io.hasNoSpecExec := hasNoSpecExec
-  deqPtrGenModule.io.interrupt_safe := interrupt_safe(deqPtr.value)
+  deqPtrGenModule.io.interrupt_safe := intr_safe
   deqPtrGenModule.io.blockCommit := blockCommit
   deqPtrVec := deqPtrGenModule.io.out
   val deqPtrVec_next = deqPtrGenModule.io.next_out

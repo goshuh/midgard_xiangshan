@@ -74,7 +74,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val writeback = Vec(exuParameters.LsExuCnt + exuParameters.StuCnt, DecoupledIO(new ExuOutput))
     val delayedLoadError = Vec(exuParameters.LduCnt, Output(Bool()))
     val otherFastWakeup = Vec(exuParameters.LduCnt + 2 * exuParameters.StuCnt, ValidIO(new MicroOp))
-    val sb_csr = new SbufferCSRIO
+    val dsf = new DSFIO()
     // misc
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
@@ -145,7 +145,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   atomicsUnit.io.out.ready := ldOut0.ready
   loadUnits.head.io.ldout.ready := ldOut0.ready
   when(atomicsUnit.io.out.valid){
-    ldOut0.bits.uop.cf.exceptionVec := 0.U(16.W).asBools // exception will be writebacked via store wb port
+    ldOut0.bits.uop.cf.exceptionVec := 0.U(ldOut0.bits.uop.cf.exceptionVec.size.W).asBools // exception will be writebacked via store wb port
   }
 
   val ldExeWbReqs = ldOut0 +: loadUnits.tail.map(_.io.ldout)
@@ -166,10 +166,11 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   sbuffer.io.hartId := io.hartId
   atomicsUnit.io.hartId := io.hartId
 
-  io.sb_csr.expt  := dcache.io.sb_expt
-  io.sb_csr.empty := RegNext(sbuffer.io.csr.empty, true.B)
+  io.dsf.expt  := dcache.io.dsf
+  io.dsf.empty := RegNext(sbuffer.io.dsf.empty, true.B)
 
-  sbuffer.io.csr.stall := RegNext(io.sb_csr.stall && !io.sb_csr.expt, true.B)
+  sbuffer.io.dsf.drain := RegNext(io.dsf.expt || io.dsf.drain, false.B)
+  sbuffer.io.dsf.valid := DontCare
 
   // dtlb
   val sfence = RegNext(RegNext(io.sfence))
@@ -488,9 +489,24 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   sbuffer.io.dcache     <> dcache.io.lsu.store
 
   // flush sbuffer
-  val fenceFlush = io.fenceToSbuffer.flushSb
+  val fenceFlush   = io.fenceToSbuffer.flushSb
   val atomicsFlush = atomicsUnit.io.flush_sbuffer.valid
+
+  // both can now have exceptions
+  val sb_flush_q   = Wire(Bool())
+  val sb_flush_set = atomicsFlush || fenceFlush
+  val sb_flush_clr = io.fenceToSbuffer.sbIsEmpty
+  val sb_flush_vld = sb_flush_set || sb_flush_q
+
+  val sb_drain_q   = Wire(Bool())
+  val sb_drain_set = sb_flush_vld && io.dsf.valid
+  val sb_drain_vld = sb_drain_set || sb_drain_q
+
+  sb_flush_q := RegEnable(sb_flush_set && !sb_flush_clr, false.B, sb_flush_set || sb_flush_clr)
+  sb_drain_q := RegEnable(sb_drain_set && !sb_flush_clr, false.B, sb_drain_set || sb_flush_clr)
+
   io.fenceToSbuffer.sbIsEmpty := RegNext(sbuffer.io.flush.empty)
+  io.fenceToSbuffer.dsf       := sb_drain_vld
   // if both of them tries to flush sbuffer at the same time
   // something must have gone wrong
   assert(!(fenceFlush && atomicsFlush))
@@ -541,7 +557,9 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   atomicsUnit.io.pmpResp <> dvlb.pmp_o(0)
 
   atomicsUnit.io.dcache <> dcache.io.lsu.atomics
-  atomicsUnit.io.flush_sbuffer.empty := sbuffer.io.flush.empty
+  atomicsUnit.io.flush_sbuffer.empty := io.fenceToSbuffer.sbIsEmpty
+  atomicsUnit.io.flush_sbuffer.dsf   := sb_drain_vld
+
 
   atomicsUnit.io.csrCtrl := csrCtrl
 

@@ -472,10 +472,11 @@ class MemPredUpdateReq(implicit p: Parameters) extends XSBundle  {
   val stpc = UInt(MemPredPCWidth.W)
 }
 
-class SbufferCSRIO(implicit p: Parameters) extends XSBundle {
+class DSFIO(implicit p: Parameters) extends XSBundle {
   val expt  = Output(Bool())
   val empty = Output(Bool())
-  val stall = Input (Bool())
+  val drain = Input (Bool())
+  val valid = Input (Bool())
 }
 
 class CustomCSRCtrlIO(implicit p: Parameters) extends XSBundle {

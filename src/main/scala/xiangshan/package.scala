@@ -149,7 +149,7 @@ package object xiangshan {
   }
 
   object ExceptionVec {
-    def apply() = Vec(16, Bool())
+    def apply() = Vec(28, Bool())
   }
 
   object PMAMode {
@@ -524,10 +524,14 @@ package object xiangshan {
     def loadPageFault       = 13
     // def singleStep          = 14
     def storePageFault      = 15
+    def delayedInstrFault   = 24
+    def delayedLoadFault    = 25
+    def delayedStoreFault   = 27
     def priorities = Seq(
       breakPoint, // TODO: different BP has different priority
       instrPageFault,
       instrAccessFault,
+      delayedInstrFault,
       illegalInstr,
       instrAddrMisaligned,
       ecallM, ecallS, ecallU,
@@ -536,14 +540,17 @@ package object xiangshan {
       storePageFault,
       loadPageFault,
       storeAccessFault,
-      loadAccessFault
+      delayedStoreFault,
+      loadAccessFault,
+      delayedLoadFault
     )
     def all = priorities.distinct.sorted
     def frontendSet = Seq(
       instrAddrMisaligned,
       instrAccessFault,
       illegalInstr,
-      instrPageFault
+      instrPageFault,
+      delayedInstrFault
     )
     def partialSelect(vec: Vec[Bool], select: Seq[Int]): Vec[Bool] = {
       val new_vec = Wire(ExceptionVec())
@@ -623,7 +630,7 @@ package object xiangshan {
     fuGen = fenceGen,
     fuSel = (uop: MicroOp) => uop.ctrl.fuType === FuType.fence,
     FuType.fence, 2, 0, writeIntRf = false, writeFpRf = false,
-    latency = UncertainLatency(), exceptionOut = Seq(illegalInstr), // TODO: need rewrite latency structure, not just this value,
+    latency = UncertainLatency(), exceptionOut = Seq(illegalInstr, delayedStoreFault), // TODO: need rewrite latency structure, not just this value,
     flushPipe = true
   )
 
@@ -735,7 +742,7 @@ package object xiangshan {
     (uop: MicroOp) => FuType.loadCanAccept(uop.ctrl.fuType),
     FuType.ldu, 1, 0, writeIntRf = true, writeFpRf = true,
     latency = UncertainLatency(),
-    exceptionOut = Seq(loadAddrMisaligned, loadAccessFault, loadPageFault),
+    exceptionOut = Seq(loadAddrMisaligned, loadAccessFault, delayedLoadFault, loadPageFault),
     flushPipe = true,
     replayInst = true,
     hasLoadError = true
@@ -747,7 +754,7 @@ package object xiangshan {
     (uop: MicroOp) => FuType.storeCanAccept(uop.ctrl.fuType),
     FuType.stu, 1, 0, writeIntRf = false, writeFpRf = false,
     latency = UncertainLatency(),
-    exceptionOut = Seq(storeAddrMisaligned, storeAccessFault, storePageFault)
+    exceptionOut = Seq(storeAddrMisaligned, storeAccessFault, delayedStoreFault, storePageFault)
   )
 
   val stdCfg = FuConfig(

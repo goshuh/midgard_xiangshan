@@ -190,7 +190,11 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
 
   when (state === s_flush_sbuffer_resp) {
     when (io.flush_sbuffer.empty) {
-      state := s_cache_req
+      out_valid                       := io.flush_sbuffer.dsf
+      atom_override_xtval             := io.flush_sbuffer.dsf
+      exceptionVec(delayedStoreFault) := io.flush_sbuffer.dsf
+
+      state := Mux(io.flush_sbuffer.dsf, s_finish, s_cache_req)
     }
   }
 
@@ -251,6 +255,7 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
   val dcache_resp_data  = Reg(UInt())
   val dcache_resp_id    = Reg(UInt())
   val dcache_resp_error = Reg(Bool())
+  val dcache_resp_l2_err = Reg(Bool())
 
   when (state === s_cache_resp) {
     // when not miss
@@ -272,6 +277,7 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
         dcache_resp_data := io.dcache.resp.bits.data
         dcache_resp_id := io.dcache.resp.bits.id
         dcache_resp_error := io.dcache.resp.bits.error
+        dcache_resp_l2_err := io.dcache.resp.bits.l2_err
         state := s_cache_resp_latch
       }
     }
@@ -317,11 +323,17 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
         LSUOpType.amomaxu_d -> SignExt(rdataSel(63, 0), XLEN)
       ))
 
-      when (dcache_resp_error && io.csrCtrl.cache_error_enable) {
+      when (dcache_resp_error && !dcache_resp_l2_err && io.csrCtrl.cache_error_enable) {
         exceptionVec(loadAccessFault)  := isLr
         exceptionVec(storeAccessFault) := !isLr
         assert(!exceptionVec(loadAccessFault))
         assert(!exceptionVec(storeAccessFault))
+      }
+
+      when (dcache_resp_l2_err) {
+        exceptionVec(delayedLoadFault ) :=  isLr
+        exceptionVec(delayedStoreFault) := !isLr
+        atom_override_xtval := true.B
       }
 
       resp_data := resp_data_wire
@@ -434,6 +446,7 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
     difftest.io.reset      := reset
     difftest.io.coreid     := io.hartId
     difftest.io.atomicResp := (state === s_cache_resp_latch && data_valid)
+    difftest.io.atomicErr  := dcache_resp_l2_err
     difftest.io.atomicAddr := paddr_reg
     difftest.io.atomicData := data_reg
     difftest.io.atomicMask := mask_reg

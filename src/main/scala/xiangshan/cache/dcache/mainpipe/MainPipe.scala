@@ -663,6 +663,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   atomic_hit_resp.miss := false.B
   atomic_hit_resp.miss_id := s3_req.miss_id
   atomic_hit_resp.error := s3_error
+  atomic_hit_resp.l2_err := s3_l2_error
   atomic_hit_resp.replay := false.B
   atomic_hit_resp.ack_miss_queue := s3_req.miss
   atomic_hit_resp.id := lrsc_valid
@@ -671,6 +672,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   atomic_replay_resp.miss := true.B
   atomic_replay_resp.miss_id := DontCare
   atomic_replay_resp.error := false.B
+  atomic_replay_resp.l2_err := false.B
   atomic_replay_resp.replay := true.B
   atomic_replay_resp.ack_miss_queue := false.B
   atomic_replay_resp.id := DontCare
@@ -682,7 +684,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.replace_resp.valid := s3_fire && s3_req.replace
   io.replace_resp.bits := s3_req.miss_id
 
-  io.meta_write.valid := s3_fire && update_meta
+  io.meta_write.valid := s3_fire && update_meta && !s3_l2_error
   io.meta_write.bits.idx := s3_idx
   io.meta_write.bits.way_en := s3_way_en
   io.meta_write.bits.meta.coh := new_coh
@@ -692,7 +694,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.error_flag_write.bits.way_en := s3_way_en
   io.error_flag_write.bits.error := s3_l2_error
 
-  io.tag_write.valid := s3_fire && s3_req.miss
+  io.tag_write.valid := s3_fire && s3_req.miss && !s3_l2_error
   io.tag_write.bits.idx := s3_idx
   io.tag_write.bits.way_en := s3_way_en
   io.tag_write.bits.tag := get_tag(s3_req.addr)
@@ -703,7 +705,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
 
   assert(!RegNext(io.tag_write.valid && !io.tag_write_intend))
 
-  io.data_write.valid := s3_valid && s3_update_data_cango && update_data
+  io.data_write.valid := s3_valid && s3_update_data_cango && update_data && !s3_l2_error
   io.data_write.bits.way_en := s3_way_en
   io.data_write.bits.addr := s3_req.vaddr
   io.data_write.bits.wmask := banked_wmask

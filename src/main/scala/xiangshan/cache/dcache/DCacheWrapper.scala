@@ -353,6 +353,7 @@ class AtomicsResp(implicit p: Parameters) extends DCacheBundle {
   val miss_id = UInt(log2Up(cfg.nMissEntries).W)
   val replay  = Bool()
   val error   = Bool()
+  val l2_err  = Bool()
 
   val ack_miss_queue = Bool()
 
@@ -412,7 +413,7 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val lsu = new DCacheToLsuIO
   val csr = new L1CacheToCsrIO
   val error = new L1CacheErrorInfo
-  val sb_expt  = Output(Bool())
+  val dsf  = Output(Bool())
   val mshrFull = Output(Bool())
 }
 
@@ -487,7 +488,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   missQueue.io.hartId := io.hartId
   exceptionPipe.io.hartId := io.hartId
-  io.sb_expt := exceptionPipe.io.sb_expt
+  io.dsf := exceptionPipe.io.dsf
 
   val errors = ldu.map(_.io.error) ++ // load error
     Seq(mainPipe.io.error) // store / misc error 
