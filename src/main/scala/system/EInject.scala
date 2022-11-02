@@ -106,7 +106,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val raddr  = dontTouch(Wire(UInt(W.W)))
     val roffs  = dontTouch(Wire(UInt(6.W)))
     val rdata  = dontTouch(Wire(UInt(64.W)))
-    val err    = BSR(rdata, roffs)(0)
+    val err    = BSR(rdata, RegEnable(roffs, ren))(0)
 
     val wen    = dontTouch(Wire(Bool()))
     val waddr  = dontTouch(Wire(UInt(W.W)))
@@ -135,8 +135,8 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val deq = que.io.deq
 
     // random delay
-    val dly_q   = dontTouch(Wire(UInt(32.W)))
-    val dly_vld = LFSR(32, deq.valid && !o.d.valid) <= dly_q
+    val dly_q   = dontTouch(Wire(UInt(16.W)))
+    val dly_vld = LFSR(16, deq.valid && !o.d.valid) <= dly_q
 
 
     //
@@ -167,8 +167,8 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val rst_done  = dontTouch(Wire(Bool()))
 
     // easy for software
-    dly_q     := RegEnable(c.a.bits.data(31, 0),
-                          ~0.U(32.W),
+    dly_q     := RegEnable(c.a.bits.data(16.W),
+                          ~0.U(16.W),
                            ctl_req && ctl_dly)
 
     c.a.ready := Non(ctl_ren_q ## ctl_wen) && rst_done
@@ -232,9 +232,13 @@ class EInject(implicit p: Parameters) extends LazyModule {
     cha_req.address := cha_prv ?? (chk.U ## i.a.bits.address(lsb.W)) ::
                                             i.a.bits.address
 
-    cha_gnt := ren && !wen && !ctl_ren || !cha_chk
-    cha_err := err &&                      cha_chk
+    val cha_chk_q = RegEnable(cha_chk, i.a.fire)
+    val cha_req_q = RegEnable(cha_req, i.a.fire)
 
+    cha_gnt := ren && !wen && !ctl_ren || !cha_chk
+    cha_err := err &&                      cha_chk_q
+
+    val deq_vld = deq.valid &&  dly_vld
     val deq_get = deq.valid &&  deq.bits.rnw
     val deq_put = deq.valid && !deq.bits.rnw
 
@@ -256,18 +260,18 @@ class EInject(implicit p: Parameters) extends LazyModule {
     wdata           := rst_done ?? RegEnable(ctl_wdata, ctl_ren_q) :: 0.U
 
     enq.valid       := cha_fsm_is_chk && cha_err
-    enq.bits.rnw    := i.a.bits.opcode === TLMessages.Get
-    enq.bits.size   := i.a.bits.size
-    enq.bits.source := i.a.bits.source
+    enq.bits.rnw    := cha_req_q.opcode === TLMessages.Get
+    enq.bits.size   := cha_req_q.size
+    enq.bits.source := cha_req_q.source
 
     deq.ready       := i.d.fire && deq.valid
 
-    i.a.ready       := cha_fsm_is_chk
+    i.a.ready       := cha_fsm_is_idle && cha_gnt
 
     o.a.valid       := cha_fsm_is_req
-    o.a.bits        := RegEnable(cha_req, cha_fsm_is_chk && !cha_err)
+    o.a.bits        := cha_req_q
 
-    i.d.valid       := deq.valid && dly_vld || o.d.valid
+    i.d.valid       := deq_vld || o.d.valid
     i.d.bits        := deq_get ??
                            ie.AccessAck(deq.bits.source,
                                         deq.bits.size,
@@ -280,8 +284,6 @@ class EInject(implicit p: Parameters) extends LazyModule {
                                         true.B) ::
                            o.d.bits
 
-    o.d.ready       := i.d.ready &&
-                          (deq.valid && dly_vld ||
-                          !deq.valid)
+    o.d.ready       := i.d.ready && !deq_vld
   }
 }

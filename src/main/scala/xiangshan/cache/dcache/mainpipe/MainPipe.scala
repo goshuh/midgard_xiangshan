@@ -330,7 +330,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   val s2_flag_error = RegEnable(s1_flag_error, s1_fire)
   val s2_tag_error = dcacheParameters.tagCode.decode(s2_encTag).error && s2_need_tag
   val s2_l2_error = s2_req.error
-  val s2_error = s2_flag_error || s2_tag_error || s2_l2_error // data_error not included
+  val s2_error = s2_flag_error || s2_tag_error // data_error not included
 
   val s2_may_report_data_error = s2_need_data && s2_coh.state =/= ClientStates.Nothing
 
@@ -684,20 +684,20 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.replace_resp.valid := s3_fire && s3_req.replace
   io.replace_resp.bits := s3_req.miss_id
 
-  io.meta_write.valid := s3_fire && update_meta && !s3_l2_error
+  io.meta_write.valid := s3_fire && update_meta
   io.meta_write.bits.idx := s3_idx
   io.meta_write.bits.way_en := s3_way_en
-  io.meta_write.bits.meta.coh := new_coh
+  io.meta_write.bits.meta.coh := Mux(s3_l2_error, ClientMetadata.onReset, new_coh)
 
-  io.error_flag_write.valid := s3_fire && update_meta && !s3_l2_error
+  io.error_flag_write.valid := false.B
   io.error_flag_write.bits.idx := s3_idx
   io.error_flag_write.bits.way_en := s3_way_en
   io.error_flag_write.bits.error := s3_l2_error
 
-  io.tag_write.valid := s3_fire && s3_req.miss && !s3_l2_error
+  io.tag_write.valid := s3_fire && s3_req.miss
   io.tag_write.bits.idx := s3_idx
   io.tag_write.bits.way_en := s3_way_en
-  io.tag_write.bits.tag := get_tag(s3_req.addr)
+  io.tag_write.bits.tag := Mux(s3_l2_error, 0.U, get_tag(s3_req.addr))
 
   io.tag_write_intend := s3_req.miss && s3_valid
   XSPerfAccumulate("fake_tag_write_intend", io.tag_write_intend && !io.tag_write.valid)
@@ -773,7 +773,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.error.paddr := RegEnable(s2_req.addr, s2_fire)
   io.error.source.tag := RegEnable(s2_tag_error, s2_fire)
   io.error.source.data := s3_data_error
-  io.error.source.l2 := RegEnable(s2_flag_error || s2_l2_error, s2_fire)
+  io.error.source.l2 := RegEnable(s2_flag_error, s2_fire)
   io.error.opType.store := RegEnable(s2_req.isStore && !s2_req.probe, s2_fire)
   io.error.opType.probe := RegEnable(s2_req.probe, s2_fire)
   io.error.opType.release := RegEnable(s2_req.replace, s2_fire)

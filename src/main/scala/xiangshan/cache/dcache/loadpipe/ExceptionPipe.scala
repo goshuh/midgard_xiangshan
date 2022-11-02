@@ -6,6 +6,7 @@ import chisel3.util._
 import midgard._
 import midgard.util._
 import freechips.rocketchip.tilelink._
+import system._
 
 class ExceptionPipeReq(implicit p: Parameters) extends DCacheBundle {
   val paddr = Bits(PAddrBits.W)
@@ -42,6 +43,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
   io.mem_grant.ready    := false.B
   io.dsf                := false.B
 
+  val dump_addr = p(ESerialKey).ctlBase.U
 
   // --------------------------------------------
   //  state machine 
@@ -59,7 +61,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
       io.mem_acquire.valid := true.B
       io.mem_acquire.bits  := edge.Put(
         fromSource = 100.U(8.W),
-        toAddress  = 0x20000000.U(64.W) + ((2.U + io.hartId) << log2Up(cfg.blockBytes)),
+        toAddress  = dump_addr + ((2.U + io.hartId) << log2Up(cfg.blockBytes)),
         lgSize     = 6.U, // 64B cacheline
         data       = req_data,
         // mask       = req.wmask // if no mask, it is putFull, else it is putPartial
@@ -83,7 +85,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
       io.mem_acquire.valid := true.B
       io.mem_acquire.bits  := edge.Put(
         fromSource = 100.U(8.W),
-        toAddress  = 0x20000000.U(64.W) + ((2.U + io.hartId) << log2Up(cfg.blockBytes)),
+        toAddress  = dump_addr + ((2.U + io.hartId) << log2Up(cfg.blockBytes)),
         lgSize     = 4.U, // 16B <mask><addr>
         data       = req_meta,
       )._2

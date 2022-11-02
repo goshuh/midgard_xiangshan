@@ -249,7 +249,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   ) // slow to generate, for debug only
   val canInserts = (0 until EnsbufferWidth).map(i =>
     PriorityMuxDefault(if (i == 0) Seq(0.B -> 0.B) else (0 until i).map(j => sameTag(i)(j) -> remCanInsert(enbufferSelReg + j.U)), remCanInsert(enbufferSelReg + i.U))
-  ).map(_ && (sbuffer_state =/= x_drain_sbuffer) && !io.dsf.drain)
+  ).map(_ && (sbuffer_state =/= x_drain_sbuffer) && !(io.dsf.drain && !io.flush.valid))
   val forward_need_uarch_drain = WireInit(false.B)
   val merge_need_uarch_drain = WireInit(false.B)
   val do_uarch_drain = RegNext(forward_need_uarch_drain) || RegNext(RegNext(merge_need_uarch_drain)) || io.dsf.drain && !io.dsf.empty

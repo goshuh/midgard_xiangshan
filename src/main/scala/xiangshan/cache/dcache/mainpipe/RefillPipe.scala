@@ -77,10 +77,10 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
   io.data_write.bits.wmask := refill_w_req.wmask
   io.data_write.bits.data := refill_w_req.data
 
-  io.meta_write.valid := refill_w_valid && !err
+  io.meta_write.valid := refill_w_valid
   io.meta_write.bits.idx := idx
   io.meta_write.bits.way_en := refill_w_req.way_en
-  io.meta_write.bits.meta := refill_w_req.meta
+  io.meta_write.bits.meta := Mux(err, 0.U.asTypeOf(new Meta), refill_w_req.meta)
 
   // error flag might be used by loadpipe, check this later
   io.error_flag_write.valid := refill_w_valid && !err
@@ -88,10 +88,10 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
   io.error_flag_write.bits.way_en := refill_w_req.way_en
   io.error_flag_write.bits.error := refill_w_req.error
 
-  io.tag_write.valid := refill_w_valid && !err
+  io.tag_write.valid := refill_w_valid
   io.tag_write.bits.idx := idx
   io.tag_write.bits.way_en := refill_w_req.way_en
-  io.tag_write.bits.tag := tag
+  io.tag_write.bits.tag := Mux(err, 0.U, tag)
 
   io.store_resp.valid := refill_w_valid && refill_w_req.source === STORE_SOURCE.U && !err
   io.store_resp.bits := DontCare
@@ -103,7 +103,7 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
   io.release_wakeup.valid := refill_w_valid
   io.release_wakeup.bits := refill_w_req.miss_id
 
-  io.exception_write.valid := refill_w_valid && err && refill_w_req.source === STORE_SOURCE.U
+  io.exception_write.valid := refill_w_valid && refill_w_req.source === STORE_SOURCE.U && err
   io.exception_write.bits.paddr := refill_w_req.addr
   io.exception_write.bits.wmask := refill_w_req.store_mask
   io.exception_write.bits.data := refill_w_req.data
