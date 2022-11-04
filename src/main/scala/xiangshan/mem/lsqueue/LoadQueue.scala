@@ -330,9 +330,11 @@ class LoadQueue(implicit p: Parameters) extends XSModule
   val loadWbSel = Wire(Vec(LoadPipelineWidth, UInt(log2Up(LoadQueueSize).W))) // index selected last cycle
   val loadWbSelV = Wire(Vec(LoadPipelineWidth, Bool())) // index selected in last cycle is valid
 
+  val needCancel = Wire(Vec(LoadQueueSize, Bool()))
+
   val loadWbSelVec = VecInit((0 until LoadQueueSize).map(i => {
     // allocated(i) && !writebacked(i) && (datavalid(i) || refilling(i))
-    allocated(i) && !writebacked(i) && datavalid(i) // query refilling will cause bad timing
+    allocated(i) && !writebacked(i) && datavalid(i) && !needCancel(i) // query refilling will cause bad timing
   })).asUInt() // use uint instead vec to reduce verilog lines
   val remDeqMask = Seq.tabulate(LoadPipelineWidth)(getRemBits(deqMask)(_))
   // generate lastCycleSelect mask
@@ -803,7 +805,9 @@ class LoadQueue(implicit p: Parameters) extends XSModule
   // Read vaddr for mem exception
   // no inst will be commited 1 cycle before tval update
   vaddrModule.io.raddr(0) := (deqPtrExt + commitCount).value
-  io.exceptionAddr.vaddr := vaddrModule.io.rdata(0)
+  io.exceptionAddr.vaddr := Mux(uop(deqPtrExt.value).cf.exceptionVec(delayedLoadFault),
+                                io.uncache.req.bits.addr,
+                                vaddrModule.io.rdata(0))
 
   // Read vaddr for debug
   (0 until LoadPipelineWidth).map(i => {
@@ -821,7 +825,6 @@ class LoadQueue(implicit p: Parameters) extends XSModule
 
   // misprediction recovery / exception redirect
   // invalidate lq term using robIdx
-  val needCancel = Wire(Vec(LoadQueueSize, Bool()))
   for (i <- 0 until LoadQueueSize) {
     needCancel(i) := uop(i).robIdx.needFlush(io.brqRedirect) && allocated(i)
     when (needCancel(i)) {

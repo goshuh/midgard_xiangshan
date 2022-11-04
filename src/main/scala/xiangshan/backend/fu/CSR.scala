@@ -1014,27 +1014,42 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
 
   val
      (dsf_fsm_idle  ::
+      dsf_fsm_coll  ::
       dsf_fsm_drain ::
+      dsf_fsm_pend  ::
       dsf_fsm_req   ::
-      dsf_fsm_null) = Enum(3)
+      dsf_fsm_null) = Enum(5)
 
-  val dsf_fsm_q   = dontTouch(Wire(UInt(2.W)))
+  val dsf_fsm_q   = dontTouch(Wire(UInt(3.W)))
   val dsf_fsm_en  = dontTouch(Wire(Bool()))
-  val dsf_fsm_nxt = dontTouch(Wire(UInt(2.W)))
+  val dsf_fsm_nxt = dontTouch(Wire(UInt(3.W)))
 
   dsf_fsm_en  := false.B
   dsf_fsm_nxt := dsf_fsm_q
 
-  val dsf_taken = csrio.dsf.valid && raiseException && (exceptionNO === delayedStoreFault.U)
+  val dsf_taken = raiseException     && (exceptionNO    === delayedStoreFault.U)
+  val dsf_other = raiseExceptionIntr && (priviledgeMode === ModeU) && !csrio.dsf.empty && !dsf_taken
 
   switch (dsf_fsm_q) {
     is (dsf_fsm_idle) {
-      dsf_fsm_en  := csrio.dsf.expt
-      dsf_fsm_nxt := dsf_fsm_drain
+      dsf_fsm_en  := dsf_other || csrio.dsf.expt
+      dsf_fsm_nxt := Mux(dsf_other && csrio.dsf.expt, dsf_fsm_coll,
+                     Mux(dsf_other,                   dsf_fsm_drain,
+                                                      dsf_fsm_pend))
     }
-    is (dsf_fsm_drain) {
+    is (dsf_fsm_coll) {
       dsf_fsm_en  := csrio.dsf.empty
       dsf_fsm_nxt := dsf_fsm_req
+    }
+    is (dsf_fsm_drain) {
+      dsf_fsm_en  := csrio.dsf.expt || csrio.dsf.empty
+      dsf_fsm_nxt := Mux(csrio.dsf.expt,  dsf_fsm_coll,
+                                          dsf_fsm_idle)
+    }
+    is (dsf_fsm_pend) {
+      dsf_fsm_en  := dsf_other || csrio.dsf.empty
+      dsf_fsm_nxt := Mux(csrio.dsf.empty, dsf_fsm_req,
+                                          dsf_fsm_coll)
     }
     is (dsf_fsm_req) {
       dsf_fsm_en  := dsf_taken
@@ -1046,11 +1061,14 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
                          dsf_fsm_idle,
                          dsf_fsm_en)
 
-  val dsf_fsm_is_drain = dsf_fsm_q === dsf_fsm_drain
-  val dsf_fsm_is_req   = dsf_fsm_q === dsf_fsm_req
+  val dsf_fsm_is_busy = dsf_fsm_q(1, 0).orR
+  val dsf_fsm_is_req  = dsf_fsm_q(2)
 
-  csrio.dsf.valid := dsf_fsm_is_req && (priviledgeMode === ModeU)
-  csrio.dsf.drain := dsf_fsm_is_drain || csrio.dsf.valid
+  csrio.dsf.valid := dsf_fsm_is_req &&
+                       ((priviledgeMode === ModeU) ||
+                        (priviledgeMode === ModeS) && mstatusStruct.ie.s)
+
+  csrio.dsf.drain := dsf_fsm_is_busy
 
   // mtval write logic
   // Due to timing reasons of memExceptionVAddr, we delay the write of mtval and stval

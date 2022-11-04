@@ -42,13 +42,13 @@ class ESerial(implicit p: Parameters) extends LazyModule {
   val ctl_node = TLManagerNode(
                    Seq(TLSlavePortParameters.v1(
                      Seq(TLSlaveParameters.v1(
-                       address            =  Seq(AddressSet(Q.ctlBase, Q.ctlSize)),
-                       regionType         =  RegionType.UNCACHED,
-                       supportsGet        =  TransferSizes(1,  8),
-                       supportsPutFull    =  TransferSizes(1, 64),
-                       supportsPutPartial =  TransferSizes(1, 16),
-                       fifoId             =  Some(0),
-                       resources          =  new SimpleDevice("eserial", Seq("eserial")).reg)),
+                       address            = Seq(AddressSet(Q.ctlBase, Q.ctlSize)),
+                       regionType         = RegionType.UNCACHED,
+                       supportsGet        = TransferSizes(1,  8),
+                       supportsPutFull    = TransferSizes(1, 64),
+                       supportsPutPartial = TransferSizes(1, 16),
+                       fifoId             = Some(0),
+                       resources          = new SimpleDevice("eserial", Seq("eserial")).reg)),
                      beatBytes = 64)))
 
   val mst_node = TLClientNode(

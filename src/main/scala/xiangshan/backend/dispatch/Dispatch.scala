@@ -68,6 +68,8 @@ class Dispatch(implicit p: Parameters) extends XSModule with HasPerfEvents {
     val singleStep = Input(Bool())
     // lfst
     val lfst = new DispatchLFSTIO
+
+    val dsf = Input(Bool())
   })
 
   /**
@@ -185,8 +187,8 @@ class Dispatch(implicit p: Parameters) extends XSModule with HasPerfEvents {
     r => selectFrontend(r.bits.cf.exceptionVec).asUInt.orR || r.bits.ctrl.singleStep || r.bits.cf.trigger.getHitFrontend))
   val thisIsBlocked = VecInit((0 until RenameWidth).map(i => {
     // for i > 0, when Rob is empty but dispatch1 have valid instructions to enqueue, it's blocked
-    if (i > 0) isNoSpecExec(i) && (!io.enqRob.isEmpty || Cat(io.fromRename.take(i).map(_.valid)).orR)
-    else isNoSpecExec(i) && !io.enqRob.isEmpty
+    if (i > 0) isNoSpecExec(i) && (!io.enqRob.isEmpty || Cat(io.fromRename.take(i).map(_.valid)).orR) || io.dsf
+    else isNoSpecExec(i) && !io.enqRob.isEmpty || io.dsf
   }))
   val nextCanOut = VecInit((0 until RenameWidth).map(i =>
     (!isNoSpecExec(i) && !isBlockBackward(i)) || !io.fromRename(i).valid
@@ -245,15 +247,15 @@ class Dispatch(implicit p: Parameters) extends XSModule with HasPerfEvents {
   val hasSpecialInstr = Cat((0 until RenameWidth).map(i => io.fromRename(i).valid && (isBlockBackward(i) || isNoSpecExec(i)))).orR
   for (i <- 0 until RenameWidth) {
     io.recv(i) := thisCanActualOut(i) && io.enqRob.canAccept && io.toIntDq.canAccept && io.toFpDq.canAccept && io.toLsDq.canAccept
-    io.fromRename(i).ready := !hasValidInstr || !hasSpecialInstr && io.enqRob.canAccept && io.toIntDq.canAccept && io.toFpDq.canAccept && io.toLsDq.canAccept
+    io.fromRename(i).ready := !hasValidInstr || !hasSpecialInstr && io.enqRob.canAccept && io.toIntDq.canAccept && io.toFpDq.canAccept && io.toLsDq.canAccept && !io.dsf
 
     XSInfo(io.recv(i) && io.fromRename(i).valid,
       p"pc 0x${Hexadecimal(io.fromRename(i).bits.cf.pc)}, type(${isInt(i)}, ${isFp(i)}, ${isLs(i)}), " +
       p"rob ${updatedUop(i).robIdx})\n"
     )
 
-    io.allocPregs(i).isInt := io.fromRename(i).valid && io.fromRename(i).bits.ctrl.rfWen && (io.fromRename(i).bits.ctrl.ldest =/= 0.U) && !io.fromRename(i).bits.eliminatedMove
-    io.allocPregs(i).isFp  := io.fromRename(i).valid && io.fromRename(i).bits.ctrl.fpWen
+    io.allocPregs(i).isInt := io.fromRename(i).valid && io.recv(i) && io.fromRename(i).bits.ctrl.rfWen && (io.fromRename(i).bits.ctrl.ldest =/= 0.U) && !io.fromRename(i).bits.eliminatedMove
+    io.allocPregs(i).isFp  := io.fromRename(i).valid && io.recv(i) && io.fromRename(i).bits.ctrl.fpWen
     io.allocPregs(i).preg  := io.fromRename(i).bits.pdest
   }
   val renameFireCnt = PopCount(io.recv)

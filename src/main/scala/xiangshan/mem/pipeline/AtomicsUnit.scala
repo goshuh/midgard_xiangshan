@@ -144,6 +144,8 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
       exceptionVec(loadPageFault)       := io.dtlb.resp.bits.excp.pf.ld
       exceptionVec(storeAccessFault)    := io.dtlb.resp.bits.excp.af.st
       exceptionVec(loadAccessFault)     := io.dtlb.resp.bits.excp.af.ld
+      exceptionVec(delayedLoadFault)    := false.B
+      exceptionVec(delayedStoreFault)   := false.B
       static_pm := io.dtlb.resp.bits.static_pm
 
       when (!io.dtlb.resp.bits.miss) {
@@ -333,7 +335,8 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
       when (dcache_resp_l2_err) {
         exceptionVec(delayedLoadFault ) :=  isLr
         exceptionVec(delayedStoreFault) := !isLr
-        atom_override_xtval := true.B
+        atom_override_xtval   := true.B
+        io.exceptionAddr.bits := paddr
       }
 
       resp_data := resp_data_wire
