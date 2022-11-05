@@ -52,7 +52,6 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
     val tag_write = DecoupledIO(new TagWriteReq)
     val store_resp = ValidIO(new DCacheLineResp)
     val release_wakeup = ValidIO(UInt(log2Up(cfg.nMissEntries).W))
-    val exception_write = DecoupledIO(new ExceptionPipeReq)
   })
 
   // Assume that write in refill pipe is always ready
@@ -93,7 +92,7 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
   io.tag_write.bits.way_en := refill_w_req.way_en
   io.tag_write.bits.tag := Mux(err, 0.U, tag)
 
-  io.store_resp.valid := refill_w_valid && refill_w_req.source === STORE_SOURCE.U && !err
+  io.store_resp.valid := refill_w_valid && refill_w_req.source === STORE_SOURCE.U
   io.store_resp.bits := DontCare
   io.store_resp.bits.miss := false.B
   io.store_resp.bits.replay := false.B
@@ -103,9 +102,4 @@ class RefillPipe(implicit p: Parameters) extends DCacheModule {
   io.release_wakeup.valid := refill_w_valid
   io.release_wakeup.bits := refill_w_req.miss_id
 
-  io.exception_write.valid := refill_w_valid && refill_w_req.source === STORE_SOURCE.U && err
-  io.exception_write.bits.paddr := refill_w_req.addr
-  io.exception_write.bits.wmask := refill_w_req.store_mask
-  io.exception_write.bits.data := refill_w_req.data
-  io.exception_write.bits.id   := refill_w_req.id
 }

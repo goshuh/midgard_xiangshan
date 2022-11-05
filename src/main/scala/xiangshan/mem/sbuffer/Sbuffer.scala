@@ -54,11 +54,13 @@ class SbufferEntryState (implicit p: Parameters) extends SbufferBundle {
   val w_timeout = Bool() // with timeout resp, waiting for resend store pipeline req timeout
   val w_sameblock_inflight = Bool() // same cache block dcache req is inflight
   val s_recheck_inflight = Bool() // recheck if same cache block dcache req is inflight
+  val store_fault = Bool() // delayed store fault
 
-  def isInvalid(): Bool = !state_valid
+  def isInvalid(): Bool = !state_valid && !store_fault
   def isValid(): Bool = state_valid
   def isActive(): Bool = state_valid && !state_inflight
   def isInflight(): Bool = state_inflight
+  def isStoreFault(): Bool = store_fault
   def isDcacheReqCandidate(): Bool = state_valid && !state_inflight && !w_sameblock_inflight
 }
 
@@ -509,9 +511,14 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     when (resp.fire()) {
       stateVec(dcache_resp_id).state_inflight := false.B
       stateVec(dcache_resp_id).state_valid := false.B
+      stateVec(dcache_resp_id).store_fault := false.B
       assert(!resp.bits.replay)
       assert(!resp.bits.miss) // not need to resp if miss, to be opted
       assert(stateVec(dcache_resp_id).state_inflight === true.B)
+      when (resp.bits.err) {
+        // delayed store fault, request exception pipe
+        stateVec(dcache_resp_id).store_fault := true.B
+      }
     }
 
     // Update w_sameblock_inflight flag is delayed for 1 cycle
@@ -540,6 +547,33 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     // waiting for timeout
     assert(io.dcache.replay_resp.bits.replay)
     assert(stateVec(replay_resp_id).state_inflight === true.B)
+  }
+
+  io.dcache.exception_req.valid := false.B
+  io.dcache.exception_req.bits := 0.S.asTypeOf(new ExceptionPipeReq)
+
+  // delayed store fault request
+  val store_faults = VecInit(stateVec.map(s => s.isStoreFault()))
+  val need_drain_fault = store_faults.asUInt.orR
+  when (need_drain_fault) {
+    val fault_id = PriorityEncoder(store_faults)
+    val e_req = Wire(new ExceptionPipeReq)
+    e_req.paddr := getAddr(ptag(fault_id))
+    e_req.data  := data(fault_id).asUInt
+    e_req.wmask := mask(fault_id).asUInt
+    e_req.id    := fault_id
+
+    io.dcache.exception_req.valid := true.B
+    io.dcache.exception_req.bits := e_req
+  }
+
+  // delayed store fault response
+  val e_resp = io.dcache.exception_resp
+  val e_resp_id = e_resp.bits.id
+  when (e_resp.fire()) {
+      stateVec(e_resp_id).state_inflight := false.B
+      stateVec(e_resp_id).state_valid := false.B
+      stateVec(e_resp_id).store_fault := false.B
   }
   
   // TODO: reuse cohCount
