@@ -332,6 +332,8 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
         assert(!exceptionVec(storeAccessFault))
       }
 
+      exceptionVec(delayedLoadFault ) := false.B
+      exceptionVec(delayedStoreFault) := false.B
       when (dcache_resp_l2_err) {
         exceptionVec(delayedLoadFault ) :=  isLr
         exceptionVec(delayedStoreFault) := !isLr

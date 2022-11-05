@@ -390,14 +390,16 @@ class DCacheLineIO(implicit p: Parameters) extends DCacheBundle
 class DCacheToSbufferIO(implicit p: Parameters) extends DCacheBundle { 
   // sbuffer will directly send request to dcache main pipe
   val req = Flipped(Decoupled(new DCacheLineReq))
+  val exception_req = Flipped(Decoupled(new ExceptionPipeReq))
 
   val main_pipe_hit_resp = ValidIO(new DCacheLineResp)
   val refill_hit_resp = ValidIO(new DCacheLineResp)
-  val exception_hit_resp = ValidIO(new DCacheLineResp)
+  val exception_resp = ValidIO(new DCacheLineResp)
 
   val replay_resp = ValidIO(new DCacheLineResp)
 
-  def hit_resps: Seq[ValidIO[DCacheLineResp]] = Seq(main_pipe_hit_resp, refill_hit_resp, exception_hit_resp)
+  def hit_resps: Seq[ValidIO[DCacheLineResp]] = Seq(main_pipe_hit_resp, refill_hit_resp)
+
 }
 
 class DCacheToLsuIO(implicit p: Parameters) extends DCacheBundle {
@@ -659,12 +661,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
         s.bits.way_en === missQueue.io.refill_pipe_req.bits.way_en
     )).orR
 
-  val dsf_blk = missQueue.io.refill_pipe_req.valid                           &&
-               (missQueue.io.refill_pipe_req.bits.source === STORE_SOURCE.U) &&
-                missQueue.io.refill_pipe_req.bits.error                      &&
-               !exceptionPipe.io.req.ready
-
-  block_decoupled(missQueue.io.refill_pipe_req, refillPipe.io.req, refillShouldBeBlocked || dsf_blk)
+  block_decoupled(missQueue.io.refill_pipe_req, refillPipe.io.req, refillShouldBeBlocked)
   missQueue.io.refill_pipe_resp := refillPipe.io.resp
   io.lsu.store.refill_hit_resp := RegNext(refillPipe.io.store_resp)
 
@@ -726,9 +723,9 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   replacer.access(touchSets, touchWays)
 
   //----------------------------------------
-  // exceptionPipe
-  exceptionPipe.io.req <> refillPipe.io.exception_write
-  io.lsu.store.exception_hit_resp := RegNext(exceptionPipe.io.resp)
+  // exceptionPipe <=> sbuffer
+  exceptionPipe.io.req <> io.lsu.store.exception_req
+  io.lsu.store.exception_resp <> exceptionPipe.io.resp
 
   //----------------------------------------
   // assertions

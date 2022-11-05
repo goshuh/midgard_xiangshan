@@ -11,7 +11,7 @@ import system._
 class ExceptionPipeReq(implicit p: Parameters) extends DCacheBundle {
   val paddr = Bits(PAddrBits.W)
   val wmask = Bits(cfg.blockBytes.W)
-  val data  = Vec (DCacheBanks, Bits(DCacheSRAMRowBits.W))
+  val data  = UInt((DCacheBanks * DCacheSRAMRowBits).W)
   val id    = UInt(reqIdWidth.W)
 }
 
