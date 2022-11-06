@@ -48,6 +48,7 @@ trait MemoryOpConstants {
   def M_CLEAN   = "b10011".U // write back dirty data and retain R/W permissions
   def M_SFENCE  = "b10100".U // flush TLB
   def M_WOK     = "b10111".U // check write permissions but don't perform a write
+  def M_DUMP    = "b11111".U
 
   def isAMOLogical(cmd: UInt) = cmd === M_XA_SWAP || cmd === M_XA_XOR || cmd === M_XA_OR || cmd === M_XA_AND
   def isAMOArithmetic(cmd: UInt) = cmd === M_XA_ADD || cmd === M_XA_MIN || cmd === M_XA_MAX || cmd === M_XA_MINU || cmd === M_XA_MAXU
@@ -82,7 +83,8 @@ object MemoryOpConstants extends MemoryOpConstants {
       M_PRODUCE -> "M_PRODUCE",
       M_CLEAN -> "M_CLEAN",
       M_SFENCE -> "M_SFENCE",
-      M_WOK -> "M_WOK"
+      M_WOK -> "M_WOK",
+      M_DUMP -> "M_DUMP"
     )
     val opLitNames = opNames map {case (k, v) => (k.litValue.longValue, v)}
     return opLitNames(cmd.litValue.longValue)

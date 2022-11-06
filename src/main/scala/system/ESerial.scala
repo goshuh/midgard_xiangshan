@@ -149,7 +149,7 @@ class ESerial(implicit p: Parameters) extends LazyModule {
     val ctl_norm_resp = ctl_rnw_q ??
                             ce.AccessAck(ctl_src_q,
                                          3.U,
-                                         RegEnable(ctl_rdata, ctl_req)) ::
+                                         Rep(RegEnable(ctl_rdata, ctl_req), 8)) ::
                             ce.AccessAck(ctl_src_q,
                                          3.U)
 

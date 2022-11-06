@@ -430,13 +430,18 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     genSameBlockInflightMask(ptag_in).orR
   }
 
+  // delayed store fault request
+  val store_faults = VecInit(stateVec.map(s => s.isStoreFault()))
+  val need_dump = store_faults.asUInt.orR && io.dcache.exception_ready
+  val dump_idx  = PriorityEncoder(store_faults)
+
   val need_drain = needDrain(sbuffer_state)
   val need_replace = do_eviction || (sbuffer_state === x_replace)
-  val evictionIdx = Mux(missqReplayHasTimeOut,
+  val evictionIdx = Mux(need_dump, dump_idx, Mux(missqReplayHasTimeOut,
     missqReplayTimeOutIdxReg,
     Mux(need_drain,
       drainIdx,
-      Mux(cohHasTimeOut, cohTimeOutIdx, replaceIdx)
+      Mux(cohHasTimeOut, cohTimeOutIdx, replaceIdx))
     )
   )
   
@@ -444,7 +449,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
       If there is a inflight dcache req which has same ptag with evictionIdx's ptag,
       current eviction should be blocked.
    */
-  val prepareValid = missqReplayHasTimeOut || 
+  val prepareValid = need_dump || missqReplayHasTimeOut || 
     stateVec(evictionIdx).isDcacheReqCandidate() && (need_drain || cohHasTimeOut || need_replace)
   assert(!(stateVec(evictionIdx).isDcacheReqCandidate && !noSameBlockInflight(evictionIdx)))
   val prepareValidReg = RegInit(false.B)
@@ -458,7 +463,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   when(canSendDcacheReq){
     prepareValidReg := prepareValid
   }
-  when(willSendDcacheReq){
+  when(willSendDcacheReq && !need_dump){
     stateVec(evictionIdx).state_inflight := true.B
     stateVec(evictionIdx).w_timeout := false.B
     // stateVec(evictionIdx).s_pipe_req := true.B
@@ -476,10 +481,11 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   val evictionIdxReg = RegEnable(evictionIdx, willSendDcacheReq)
   val evictionPTag = RegEnable(ptag(evictionIdx), willSendDcacheReq)
   val evictionVTag = RegEnable(vtag(evictionIdx), willSendDcacheReq)
+  val evictionDump = RegEnable(need_dump, false.B, willSendDcacheReq)
 
   io.dcache.req.valid := prepareValidReg
   io.dcache.req.bits := DontCare
-  io.dcache.req.bits.cmd    := MemoryOpConstants.M_XWR
+  io.dcache.req.bits.cmd    := Mux(evictionDump, MemoryOpConstants.M_DUMP, MemoryOpConstants.M_XWR)
   io.dcache.req.bits.addr   := getAddr(evictionPTag)
   io.dcache.req.bits.vaddr   := getAddr(evictionVTag)
   io.dcache.req.bits.data  := data(evictionIdxReg).asUInt
@@ -547,24 +553,6 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     // waiting for timeout
     assert(io.dcache.replay_resp.bits.replay)
     assert(stateVec(replay_resp_id).state_inflight === true.B)
-  }
-
-  io.dcache.exception_req.valid := false.B
-  io.dcache.exception_req.bits := 0.S.asTypeOf(new ExceptionPipeReq)
-
-  // delayed store fault request
-  val store_faults = VecInit(stateVec.map(s => s.isStoreFault()))
-  val need_drain_fault = store_faults.asUInt.orR
-  when (need_drain_fault) {
-    val fault_id = PriorityEncoder(store_faults)
-    val e_req = Wire(new ExceptionPipeReq)
-    e_req.paddr := getAddr(ptag(fault_id))
-    e_req.data  := data(fault_id).asUInt
-    e_req.wmask := mask(fault_id).asUInt
-    e_req.id    := fault_id
-
-    io.dcache.exception_req.valid := true.B
-    io.dcache.exception_req.bits := e_req
   }
 
   // delayed store fault response

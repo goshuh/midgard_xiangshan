@@ -390,7 +390,7 @@ class DCacheLineIO(implicit p: Parameters) extends DCacheBundle
 class DCacheToSbufferIO(implicit p: Parameters) extends DCacheBundle { 
   // sbuffer will directly send request to dcache main pipe
   val req = Flipped(Decoupled(new DCacheLineReq))
-  val exception_req = Flipped(Decoupled(new ExceptionPipeReq))
+  val exception_ready = Output(Bool())
 
   val main_pipe_hit_resp = ValidIO(new DCacheLineResp)
   val refill_hit_resp = ValidIO(new DCacheLineResp)
@@ -399,7 +399,6 @@ class DCacheToSbufferIO(implicit p: Parameters) extends DCacheBundle {
   val replay_resp = ValidIO(new DCacheLineResp)
 
   def hit_resps: Seq[ValidIO[DCacheLineResp]] = Seq(main_pipe_hit_resp, refill_hit_resp)
-
 }
 
 class DCacheToLsuIO(implicit p: Parameters) extends DCacheBundle {
@@ -633,7 +632,14 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   // when a req enters main pipe, if it is set-conflict with replace pipe or refill pipe,
   // block the req in main pipe
   block_decoupled(probeQueue.io.pipe_req, mainPipe.io.probe_req, missQueue.io.refill_pipe_req.valid)
-  block_decoupled(io.lsu.store.req, mainPipe.io.store_req, refillPipe.io.req.valid)
+
+  val sb_norm = io.lsu.store.req.bits.cmd === MemoryOpConstants.M_XWR
+  val sb_dump = io.lsu.store.req.bits.cmd === MemoryOpConstants.M_DUMP
+
+  mainPipe.io.store_req.valid := io.lsu.store.req.valid && !refillPipe.io.req.valid && sb_norm
+  mainPipe.io.store_req.bits  := io.lsu.store.req.bits
+
+  io.lsu.store.req.ready := mainPipe.io.store_req.ready && !refillPipe.io.req.valid || sb_dump
 
   io.lsu.store.replay_resp := RegNext(mainPipe.io.store_replay_resp)
   io.lsu.store.main_pipe_hit_resp := mainPipe.io.store_hit_resp
@@ -724,8 +730,14 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   //----------------------------------------
   // exceptionPipe <=> sbuffer
-  exceptionPipe.io.req <> io.lsu.store.exception_req
-  io.lsu.store.exception_resp <> exceptionPipe.io.resp
+  exceptionPipe.io.req.valid      := io.lsu.store.req.valid && sb_dump
+  exceptionPipe.io.req.bits.id    := io.lsu.store.req.bits.id
+  exceptionPipe.io.req.bits.data  := io.lsu.store.req.bits.data
+  exceptionPipe.io.req.bits.paddr := io.lsu.store.req.bits.addr
+  exceptionPipe.io.req.bits.wmask := io.lsu.store.req.bits.mask
+
+  io.lsu.store.exception_ready    := exceptionPipe.io.req.ready
+  io.lsu.store.exception_resp     <> exceptionPipe.io.resp
 
   //----------------------------------------
   // assertions
