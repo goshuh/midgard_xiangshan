@@ -432,7 +432,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
 
   // delayed store fault request
   val store_faults = VecInit(stateVec.map(s => s.isStoreFault()))
-  val need_dump = store_faults.asUInt.orR && io.dcache.exception_ready
+  val need_dump = Wire(Bool())
   val dump_idx  = PriorityEncoder(store_faults)
 
   val need_drain = needDrain(sbuffer_state)
@@ -491,6 +491,8 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   io.dcache.req.bits.data  := data(evictionIdxReg).asUInt
   io.dcache.req.bits.mask  := mask(evictionIdxReg).asUInt
   io.dcache.req.bits.id := evictionIdxReg
+
+  need_dump := store_faults.asUInt.orR && io.dcache.exception_ready && !RegNext(willSendDcacheReq && need_dump, false.B)
 
   io.dsf.expt  := false.B
   io.dsf.empty := sbuffer_empty && io.sqempty
