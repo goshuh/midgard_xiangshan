@@ -145,15 +145,14 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val ctl_req   = c.a.fire
     val ctl_resp  = c.d.fire
 
-    val ctl_set   = Non(c.a.bits.address(3))
-    val ctl_dly   = Any(c.a.bits.address(4))
+    val ctl_sel   = Dec(c.a.bits.address(4, 3))
     val ctl_rnw   = c.a.bits.opcode === TLMessages.Get
 
     val ctl_vld_q = RegEnable(ctl_req, false.B, ctl_req || ctl_resp)
     val ctl_rnw_q = RegEnable(ctl_rnw,          ctl_req)
     val ctl_src_q = RegEnable(c.a.bits.source,  ctl_req)
 
-    val ctl_ren   = ctl_req && !ctl_dly
+    val ctl_ren   = ctl_req && !ctl_rnw && !c.a.bits.address(4)
     val ctl_raddr = c.a.bits.data(18 :+ W)
     val ctl_roffs = c.a.bits.data(18 :- 6)
 
@@ -161,7 +160,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val ctl_ren_q = RegNext(ctl_ren)
     val ctl_wen   = RegNext(ctl_ren_q)
     val ctl_wmask = RegEnable(Dec(ctl_roffs), ctl_ren)
-    val ctl_wdata = ctl_wmask & Rep(RegNext(ctl_set), 64) |
+    val ctl_wdata = ctl_wmask & Rep(RegNext(ctl_sel(0)), 64) |
                    ~ctl_wmask & rdata
 
     val rst_done  = dontTouch(Wire(Bool()))
@@ -169,7 +168,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     // easy for software
     dly_q     := RegEnable(c.a.bits.data(16.W),
                           ~0.U(16.W),
-                           ctl_req && ctl_dly)
+                           ctl_req && ctl_sel(2))
 
     c.a.ready := Non(ctl_ren_q ## ctl_wen) && rst_done
 
@@ -235,19 +234,21 @@ class EInject(implicit p: Parameters) extends LazyModule {
     val cha_chk_q = RegEnable(cha_chk, i.a.fire)
     val cha_req_q = RegEnable(cha_req, i.a.fire)
 
-    cha_gnt := ren && !wen && !ctl_ren || !cha_chk
+    cha_gnt := ren && !wen && !ctl_req || !cha_chk
     cha_err := err &&                      cha_chk_q
 
     val deq_vld = deq.valid &&  dly_vld
-    val deq_get = deq.valid &&  deq.bits.rnw
-    val deq_put = deq.valid && !deq.bits.rnw
+    val deq_get = deq_vld   &&  deq.bits.rnw
+    val deq_put = deq_vld   && !deq.bits.rnw
 
     // reset
-    val rst_q = dontTouch(Wire(UInt((W + 1).W)))
+    val rst_q   = dontTouch(Wire(UInt((W + 1).W)))
 
-    rst_q    := RegEnable(rst_q + 1.U,
+    val ctl_rst = ctl_req && !ctl_rnw && ctl_sel(3)
+
+    rst_q    := RegEnable(NeQ(ctl_rst, rst_q + 1.U),
                           0.U,
-                         !rst_done)
+                          ctl_rst || Non(rst_done))
     rst_done := rst_q(W)
 
     // output
@@ -264,7 +265,7 @@ class EInject(implicit p: Parameters) extends LazyModule {
     enq.bits.size   := cha_req_q.size
     enq.bits.source := cha_req_q.source
 
-    deq.ready       := i.d.fire && deq.valid
+    deq.ready       := i.d.fire && deq_vld
 
     i.a.ready       := cha_fsm_is_idle && cha_gnt
 
