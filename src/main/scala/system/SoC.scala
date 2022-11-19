@@ -176,7 +176,6 @@ trait HaveAXI4MemPort {
 
   val mmu = if (p(MidgardKey).en) Some(LazyModule(new BSMMUWrapper())) else None
   val err = if (p(EInjectKey).en) Some(LazyModule(new EInject()     )) else None
-  val ser = if (p(ESerialKey).en) Some(LazyModule(new ESerial()     )) else None
 
   val mem_nodes =
     Seq(mem_xbar, TLBuffer()) ++
@@ -193,7 +192,6 @@ trait HaveAXI4MemPort {
 
   mmu.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
   err.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
-  ser.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
 
   memAXI4SlaveNode :=
     AXI4Buffer() :=
@@ -226,7 +224,6 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
 
   val mmuRange = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
   val errRange = AddressSet(p(EInjectKey).ctlBase, p(EInjectKey).ctlSize)
-  val serRange = AddressSet(p(ESerialKey).ctlBase, p(ESerialKey).ctlSize)
 
   ResourceBinding {
     // add interrupt
@@ -241,7 +238,6 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
   ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange))
    .flatMap(_.subtract(mmuRange))
    .flatMap(_.subtract(errRange))
-   .flatMap(_.subtract(serRange))
   val peripheralNode = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
     Seq(AXI4SlaveParameters(
       address = peripheralRange,
@@ -299,8 +295,6 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
       core_out
   }
   l3_banked_xbar := TLBuffer() := l3_xbar
-
-  ser.foreach(l3_banked_xbar := TLWidthWidget(64) := _.mst_node)
 
   val clint = LazyModule(new CLINT(CLINTParams(0x38000000L), 8))
   clint.node := peripheralXbar

@@ -26,7 +26,7 @@ import xiangshan.ExceptionNO._
 class FenceToSbuffer extends Bundle {
   val flushSb = Output(Bool())
   val sbIsEmpty = Input(Bool())
-  val dsf = Input(Bool())
+  val ise = Input(Bool())
 }
 
 class Fence(implicit p: Parameters) extends FunctionUnit {
@@ -41,7 +41,7 @@ class Fence(implicit p: Parameters) extends FunctionUnit {
     io.in.bits.src(0)
   )
 
-  val s_idle :: s_wait :: s_tlb :: s_icache :: s_fence :: s_nofence :: s_dsf :: Nil = Enum(7)
+  val s_idle :: s_wait :: s_tlb :: s_icache :: s_fence :: s_nofence :: s_ise :: Nil = Enum(7)
 
   val state = RegInit(s_idle)
   /* fsm
@@ -77,8 +77,8 @@ class Fence(implicit p: Parameters) extends FunctionUnit {
   when (state === s_wait && func === FenceOpType.nofence  && sbEmpty) { state := s_nofence }
   when (state =/= s_idle && state =/= s_wait) { state := s_idle }
 
-  when (sbuffer && sbEmpty && toSbuffer.dsf) {
-    state := s_dsf
+  when (sbuffer && sbEmpty && toSbuffer.ise) {
+    state := s_ise
   }
 
   io.in.ready := state === s_idle
@@ -86,7 +86,7 @@ class Fence(implicit p: Parameters) extends FunctionUnit {
   io.out.bits.data := DontCare
   io.out.bits.uop := uop
   io.out.bits.uop.cf.exceptionVec(illegalInstr) := func === FenceOpType.sfence && disableSfence
-  io.out.bits.uop.cf.exceptionVec(delayedStoreFault) := state === s_dsf
+  io.out.bits.uop.cf.exceptionVec(delayedStoreFault) := state === s_ise
 
   XSDebug(io.in.valid, p"In(${io.in.valid} ${io.in.ready}) state:${state} Inpc:0x${Hexadecimal(io.in.bits.uop.cf.pc)} InrobIdx:${io.in.bits.uop.robIdx}\n")
   XSDebug(state =/= s_idle, p"state:${state} sbuffer(flush:${sbuffer} empty:${sbEmpty}) fencei:${fencei} sfence:${sfence}\n")

@@ -51,7 +51,6 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
 
   val i_mmio_port = TLTempNode()
   val d_mmio_port = TLTempNode()
-  val e_mmio_port = TLTempNode()
 
   busPMU := l1d_logger
   l1_xbar :=* busPMU
@@ -65,7 +64,6 @@ class XSTileMisc()(implicit p: Parameters) extends LazyModule
 
   mmio_xbar := TLBuffer() := i_mmio_port
   mmio_xbar := TLBuffer() := d_mmio_port
-  mmio_xbar := TLBuffer() := TLWidthWidget(64) := e_mmio_port
   beu.node  := TLBuffer() := mmio_xbar
   mmio_port := TLBuffer() := mmio_xbar
 
@@ -123,6 +121,9 @@ class XSTile()(implicit p: Parameters) extends LazyModule
     Some(buffer)
   } else None
 
+  // put goes to l2
+  misc.busPMU := TLWidthWidget(64) := core.memBlock.dcache.dbcClientNode
+
   l2cache match {
     case Some(l2) =>
       misc.l2_binder.get :*= l2.node :*= TLBuffer() :*= misc.l1_xbar
@@ -131,7 +132,6 @@ class XSTile()(implicit p: Parameters) extends LazyModule
 
   misc.i_mmio_port := core.frontend.instrUncache.clientNode
   misc.d_mmio_port := core.memBlock.uncache.clientNode
-  misc.e_mmio_port := core.memBlock.dcache.excClientNode
 
   lazy val module = new LazyModuleImp(this){
     val io = IO(new Bundle {

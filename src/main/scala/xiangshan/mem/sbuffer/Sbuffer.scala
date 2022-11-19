@@ -27,7 +27,7 @@ import difftest._
 class SbufferFlushBundle extends Bundle {
   val valid = Output(Bool())
   val empty = Input(Bool())
-  val dsf   = Input(Bool())
+  val ise   = Input(Bool())
 }
 
 trait HasSbufferConst extends HasXSParameter {
@@ -116,7 +116,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     val sqempty = Input(Bool())
     val flush = Flipped(new SbufferFlushBundle)
     val csrCtrl = Flipped(new CustomCSRCtrlIO)
-    val dsf = new DSFIO()
+    val ise = new ISEIO()
   })
 
   val dataModule = Module(new SbufferData)
@@ -251,10 +251,10 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   ) // slow to generate, for debug only
   val canInserts = (0 until EnsbufferWidth).map(i =>
     PriorityMuxDefault(if (i == 0) Seq(0.B -> 0.B) else (0 until i).map(j => sameTag(i)(j) -> remCanInsert(enbufferSelReg + j.U)), remCanInsert(enbufferSelReg + i.U))
-  ).map(_ && ((sbuffer_state =/= x_drain_sbuffer) || io.dsf.drain))
+  ).map(_ && ((sbuffer_state =/= x_drain_sbuffer) || io.ise.drain))
   val forward_need_uarch_drain = WireInit(false.B)
   val merge_need_uarch_drain = WireInit(false.B)
-  val do_uarch_drain = RegNext(forward_need_uarch_drain) || RegNext(RegNext(merge_need_uarch_drain)) || io.dsf.drain && !io.dsf.empty
+  val do_uarch_drain = RegNext(forward_need_uarch_drain) || RegNext(RegNext(merge_need_uarch_drain)) || io.ise.drain && !io.ise.empty
   XSPerfAccumulate("do_uarch_drain", do_uarch_drain)
 
   (0 until EnsbufferWidth).foreach(i =>
@@ -379,7 +379,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   XSDebug(p"validCount[$validCount]\n")
 
   io.flush.empty := RegNext(empty && io.sqempty)
-  io.flush.dsf   := DontCare
+  io.flush.ise   := DontCare
   // lru.io.flush := sbuffer_state === x_drain_all && empty
   switch(sbuffer_state){
     is(x_idle){
@@ -494,8 +494,8 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
 
   need_dump := store_faults.asUInt.orR && io.dcache.exception_ready && !RegNext(willSendDcacheReq && need_dump, false.B)
 
-  io.dsf.expt  := false.B
-  io.dsf.empty := sbuffer_empty && io.sqempty
+  io.ise.expt  := false.B
+  io.ise.empty := sbuffer_empty && io.sqempty
 
   when (io.dcache.req.fire()) {
     assert(!(io.dcache.req.bits.vaddr === 0.U))

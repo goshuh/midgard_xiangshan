@@ -119,7 +119,8 @@ class CSRFileIO(implicit p: Parameters) extends XSBundle {
   val memExceptionVAddr = Input(UInt(VAddrBits.W))
   // from outside cpu,externalInterrupt
   val externalInterrupt = new ExternalInterruptIO
-  val dsf = Flipped(new DSFIO())
+  val ise = Flipped(new ISEIO())
+  val dbc = Flipped(new DBCIO())
   // TLB
   val tlb = Output(new TlbCsrBundle)
   // Debug Mode
@@ -616,6 +617,26 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     perfCnts(i) := Mux(mcountinhibit(i+3) | !perfEventscounten(i), perfCnts(i), perfCnts(i) + perf_events(i).value)
   }
 
+  // test only
+  if (coreParams.L2CacheParamsOpt.isEmpty) {
+    val u = RegNext(priviledgeMode === ModeU)
+    val s = RegNext(priviledgeMode === ModeS)
+    val r = RegNext(csrio.perf.retiredInstr)
+
+    perfCnts(25) := perfCnts(25) + Mux(u, 1.U, 0.U)
+    perfCnts(26) := perfCnts(26) + Mux(u, r,   0.U)
+    perfCnts(27) := perfCnts(27) + Mux(s, 1.U, 0.U)
+    perfCnts(28) := perfCnts(28) + Mux(s, r,   0.U)
+  }
+
+  val sdbbase = dontTouch(Reg(UInt(64.W)))
+  val sdbmask = dontTouch(Reg(UInt(64.W)))
+  val sdbtail = dontTouch(Reg(UInt(64.W)))
+
+  csrio.dbc.base := sdbbase
+  csrio.dbc.mask := sdbmask
+  csrio.dbc.tail := sdbtail
+
   // CSR reg map
   val basicPrivMapping = Map(
 
@@ -662,6 +683,11 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     MaskedRegMap(Slvpredctl, slvpredctl),
     MaskedRegMap(Smblockctl, smblockctl),
     MaskedRegMap(Srnctl, srnctl),
+
+    MaskedRegMap(Sdbbase, sdbbase),
+    MaskedRegMap(Sdbmask, sdbmask),
+    MaskedRegMap(Sdbhead, 0.U, wfn = null, rfn = _ => csrio.dbc.head),
+    MaskedRegMap(Sdbtail, sdbtail),
 
     //--- Machine Information Registers ---
     MaskedRegMap(Mvendorid, mvendorid, 0.U(XLEN.W), MaskedRegMap.Unwritable),
@@ -946,7 +972,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   intrVecEnable.zip(ideleg.asBools).map{case(x,y) => x := priviledgedEnableDetect(y) && !disableInterrupt}
   val intrVec = Cat(debugIntr && !debugMode, (mie(11, 0) & mip.asUInt & intrVecEnable.asUInt))
   val intrBitSet = intrVec.orR
-  csrio.interrupt := intrBitSet || csrio.dsf.valid
+  csrio.interrupt := intrBitSet || csrio.ise.valid
   // Page 45 in RISC-V Privileged Specification
   // The WFI instruction can also be executed when interrupts are disabled. The operation of WFI
   // must be unaffected by the global interrupt bits in mstatus (MIE and SIE) and the delegation
@@ -959,7 +985,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
 
   // interrupts
   val intrNO = IntPriority.foldRight(0.U)((i: Int, sum: UInt) => Mux(intrVec(i), i.U, sum))
-  val raiseIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt && !csrio.dsf.valid
+  val raiseIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt && !csrio.ise.valid
   val ivmEnable = tlbBundle.priv.imode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
   val iexceptionPC = Mux(ivmEnable, SignExt(csrio.exception.bits.uop.cf.pc, XLEN), csrio.exception.bits.uop.cf.pc)
   val dvmEnable = tlbBundle.priv.dmode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
@@ -968,9 +994,9 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val raiseDebugIntr = intrNO === IRQ_DEBUG.U && raiseIntr
 
   // exceptions
-  val dsf_expt = csrio.exception.valid && csrio.exception.bits.isInterrupt && csrio.dsf.valid
+  val ise_expt = csrio.exception.valid && csrio.exception.bits.isInterrupt && csrio.ise.valid
 
-  val raiseException = csrio.exception.valid && !csrio.exception.bits.isInterrupt || dsf_expt
+  val raiseException = csrio.exception.valid && !csrio.exception.bits.isInterrupt || ise_expt
   val hasInstrPageFault = csrio.exception.bits.uop.cf.exceptionVec(instrPageFault) && raiseException
   val hasLoadPageFault = csrio.exception.bits.uop.cf.exceptionVec(loadPageFault) && raiseException
   val hasStorePageFault = csrio.exception.bits.uop.cf.exceptionVec(storePageFault) && raiseException
@@ -981,7 +1007,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val hasStoreAccessFault = csrio.exception.bits.uop.cf.exceptionVec(storeAccessFault) && raiseException
   val hasDelayedInstrFault = csrio.exception.bits.uop.cf.exceptionVec(delayedInstrFault) && raiseException
   val hasDelayedLoadFault = csrio.exception.bits.uop.cf.exceptionVec(delayedLoadFault) && raiseException
-  val hasDelayedStoreFault = csrio.exception.bits.uop.cf.exceptionVec(delayedStoreFault) && raiseException || dsf_expt
+  val hasDelayedStoreFault = csrio.exception.bits.uop.cf.exceptionVec(delayedStoreFault) && raiseException || ise_expt
   val hasbreakPoint = csrio.exception.bits.uop.cf.exceptionVec(breakPoint) && raiseException
   val hasSingleStep = csrio.exception.bits.uop.ctrl.singleStep && raiseException
   val hasTriggerHit = (csrio.exception.bits.uop.cf.trigger.hit) && raiseException
@@ -990,7 +1016,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   XSDebug(hasTriggerHit, p"Debug Mode: trigger hit, is frontend? ${Binary(csrio.exception.bits.uop.cf.trigger.frontendHit.asUInt)} " +
     p"backend hit vec ${Binary(csrio.exception.bits.uop.cf.trigger.backendHit.asUInt)}\n")
 
-  val raiseExceptionVec = Mux(dsf_expt, VecInit(GenMask(delayedStoreFault).asBools), csrio.exception.bits.uop.cf.exceptionVec)
+  val raiseExceptionVec = Mux(ise_expt, VecInit(GenMask(delayedStoreFault).asBools), csrio.exception.bits.uop.cf.exceptionVec)
   val regularExceptionNO = ExceptionNO.priorities.foldRight(0.U)((i: Int, sum: UInt) => Mux(raiseExceptionVec(i), i.U, sum))
   val exceptionNO = Mux(hasSingleStep || hasTriggerHit, 3.U, regularExceptionNO)
   val causeNO = (raiseIntr << (XLEN-1)).asUInt | Mux(raiseIntr, intrNO, exceptionNO)
@@ -1013,62 +1039,62 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   )
 
   val
-     (dsf_fsm_idle  ::
-      dsf_fsm_coll  ::
-      dsf_fsm_drain ::
-      dsf_fsm_pend  ::
-      dsf_fsm_req   ::
-      dsf_fsm_null) = Enum(5)
+     (ise_fsm_idle  ::
+      ise_fsm_coll  ::
+      ise_fsm_drain ::
+      ise_fsm_pend  ::
+      ise_fsm_req   ::
+      ise_fsm_null) = Enum(5)
 
-  val dsf_fsm_q   = dontTouch(Wire(UInt(3.W)))
-  val dsf_fsm_en  = dontTouch(Wire(Bool()))
-  val dsf_fsm_nxt = dontTouch(Wire(UInt(3.W)))
+  val ise_fsm_q   = dontTouch(Wire(UInt(3.W)))
+  val ise_fsm_en  = dontTouch(Wire(Bool()))
+  val ise_fsm_nxt = dontTouch(Wire(UInt(3.W)))
 
-  dsf_fsm_en  := false.B
-  dsf_fsm_nxt := dsf_fsm_q
+  ise_fsm_en  := false.B
+  ise_fsm_nxt := ise_fsm_q
 
-  val dsf_taken = raiseException     && (exceptionNO    === delayedStoreFault.U)
-  val dsf_other = raiseExceptionIntr && (priviledgeMode === ModeU) && !csrio.dsf.empty && !dsf_taken
+  val ise_taken = raiseException     && (exceptionNO    === delayedStoreFault.U)
+  val ise_other = raiseExceptionIntr && (priviledgeMode === ModeU) && !csrio.ise.empty && !ise_taken
 
-  switch (dsf_fsm_q) {
-    is (dsf_fsm_idle) {
-      dsf_fsm_en  := dsf_other || csrio.dsf.expt
-      dsf_fsm_nxt := Mux(dsf_other && csrio.dsf.expt, dsf_fsm_coll,
-                     Mux(dsf_other,                   dsf_fsm_drain,
-                                                      dsf_fsm_pend))
+  switch (ise_fsm_q) {
+    is (ise_fsm_idle) {
+      ise_fsm_en  := ise_other || csrio.ise.expt
+      ise_fsm_nxt := Mux(ise_other && csrio.ise.expt, ise_fsm_coll,
+                     Mux(ise_other,                   ise_fsm_drain,
+                                                      ise_fsm_pend))
     }
-    is (dsf_fsm_coll) {
-      dsf_fsm_en  := csrio.dsf.empty
-      dsf_fsm_nxt := dsf_fsm_req
+    is (ise_fsm_coll) {
+      ise_fsm_en  := csrio.ise.empty
+      ise_fsm_nxt := ise_fsm_req
     }
-    is (dsf_fsm_drain) {
-      dsf_fsm_en  := csrio.dsf.expt || csrio.dsf.empty
-      dsf_fsm_nxt := Mux(csrio.dsf.expt,  dsf_fsm_coll,
-                                          dsf_fsm_idle)
+    is (ise_fsm_drain) {
+      ise_fsm_en  := csrio.ise.expt || csrio.ise.empty
+      ise_fsm_nxt := Mux(csrio.ise.expt,  ise_fsm_coll,
+                                          ise_fsm_idle)
     }
-    is (dsf_fsm_pend) {
-      dsf_fsm_en  := dsf_other || csrio.dsf.empty
-      dsf_fsm_nxt := Mux(csrio.dsf.empty, dsf_fsm_req,
-                                          dsf_fsm_coll)
+    is (ise_fsm_pend) {
+      ise_fsm_en  := ise_other || csrio.ise.empty
+      ise_fsm_nxt := Mux(csrio.ise.empty, ise_fsm_req,
+                                          ise_fsm_coll)
     }
-    is (dsf_fsm_req) {
-      dsf_fsm_en  := dsf_taken
-      dsf_fsm_nxt := dsf_fsm_idle
+    is (ise_fsm_req) {
+      ise_fsm_en  := ise_taken
+      ise_fsm_nxt := ise_fsm_idle
     }
   }
 
-  dsf_fsm_q := RegEnable(dsf_fsm_nxt,
-                         dsf_fsm_idle,
-                         dsf_fsm_en)
+  ise_fsm_q := RegEnable(ise_fsm_nxt,
+                         ise_fsm_idle,
+                         ise_fsm_en)
 
-  val dsf_fsm_is_busy = dsf_fsm_q(1, 0).orR
-  val dsf_fsm_is_req  = dsf_fsm_q(2)
+  val ise_fsm_is_busy = ise_fsm_q(1, 0).orR
+  val ise_fsm_is_req  = ise_fsm_q(2)
 
-  csrio.dsf.valid := dsf_fsm_is_req &&
+  csrio.ise.valid := ise_fsm_is_req &&
                        ((priviledgeMode === ModeU) ||
                         (priviledgeMode === ModeS) && mstatusStruct.ie.s)
 
-  csrio.dsf.drain := dsf_fsm_is_busy
+  csrio.ise.drain := ise_fsm_is_busy
 
   // mtval write logic
   // Due to timing reasons of memExceptionVAddr, we delay the write of mtval and stval

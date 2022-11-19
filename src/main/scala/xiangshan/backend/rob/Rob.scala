@@ -308,7 +308,7 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     val csr = new RobCSRIO
     val robFull = Output(Bool())
     val cpu_halt = Output(Bool())
-    val dsf = Input(Bool())
+    val ise = Input(Bool())
   })
 
   def selectWb(index: Int, func: Seq[ExuConfig] => Boolean): Seq[(Seq[ExuConfig], ValidIO[ExuOutput])] = {
@@ -487,8 +487,8 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   val deqDispatchData = dispatchDataRead(0)
   val debug_deqUop = debug_microOp(deqPtr.value)
 
-  // hack: no mmio when dsf happens
-  val intr_safe = interrupt_safe(deqPtr.value) || io.dsf
+  // hack: no mmio when ise happens
+  val intr_safe = interrupt_safe(deqPtr.value) || io.ise
 
   val intrBitSetReg = RegNext(io.csr.intrBitSet)
   val intrEnable = intrBitSetReg && !hasNoSpecExec && intr_safe

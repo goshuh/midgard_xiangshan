@@ -192,11 +192,11 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
 
   when (state === s_flush_sbuffer_resp) {
     when (io.flush_sbuffer.empty) {
-      out_valid                       := io.flush_sbuffer.dsf
-      atom_override_xtval             := io.flush_sbuffer.dsf
-      exceptionVec(delayedStoreFault) := io.flush_sbuffer.dsf
+      out_valid                       := io.flush_sbuffer.ise
+      atom_override_xtval             := io.flush_sbuffer.ise
+      exceptionVec(delayedStoreFault) := io.flush_sbuffer.ise
 
-      state := Mux(io.flush_sbuffer.dsf, s_finish, s_cache_req)
+      state := Mux(io.flush_sbuffer.ise, s_finish, s_cache_req)
     }
   }
 

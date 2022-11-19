@@ -78,6 +78,11 @@ trait HasCSRConst {
 
   val Sdsid         = 0x9C0
 
+  val Sdbbase       = 0x9f0
+  val Sdbmask       = 0x9f1
+  val Sdbhead       = 0x9f2
+  val Sdbtail       = 0x9f3
+
   // Machine Information Registers
   val Mvendorid     = 0xF11
   val Marchid       = 0xF12

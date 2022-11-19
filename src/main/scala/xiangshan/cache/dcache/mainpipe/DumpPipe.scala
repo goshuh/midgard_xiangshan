@@ -7,29 +7,30 @@ import midgard._
 import midgard.util._
 import freechips.rocketchip.tilelink._
 import system._
+import xiangshan._
 
-class ExceptionPipeReq(implicit p: Parameters) extends DCacheBundle {
+class DumpPipeReq(implicit p: Parameters) extends DCacheBundle {
   val paddr = Bits(PAddrBits.W)
   val wmask = Bits(cfg.blockBytes.W)
   val data  = UInt((DCacheBanks * DCacheSRAMRowBits).W)
   val id    = UInt(reqIdWidth.W)
 }
 
-class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
+class DumpPipe(edge: TLEdgeOut)(implicit p: Parameters)
   extends DCacheModule
 {
   val io = IO(new Bundle() {
-    val hartId      =         Input       (UInt(8.W))
-    val req         = Flipped(DecoupledIO (new ExceptionPipeReq))
+    val req         = Flipped(DecoupledIO (new DumpPipeReq))
     val resp        =         ValidIO     (new DCacheLineResp)
     val mem_acquire =         DecoupledIO (new TLBundleA(edge.bundle))
     val mem_grant   = Flipped(DecoupledIO (new TLBundleD(edge.bundle)))
-    val dsf         =         Output      (new Bool()) // store buffer interrupt pending
+    val ise         =         Output      (new Bool()) // store buffer interrupt pending
+    val dbc         =                      new DBCIO()
   })
 
   val s_idle :: s_write_data_req :: s_write_data_resp :: s_write_meta_req :: s_write_meta_resp :: s_send_resp :: Nil = Enum(6)
   val state           = RegInit(s_idle)
-  val req             = RegInit(-1.S.asTypeOf(new ExceptionPipeReq))
+  val req             = RegInit(-1.S.asTypeOf(new DumpPipeReq))
   val req_data        = RegInit(-1.S(512.W).asUInt)
   val req_meta        = RegInit(-1.S(128.W).asUInt)
 
@@ -41,9 +42,18 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
   io.mem_acquire.valid  := false.B
   io.mem_acquire.bits   := DontCare
   io.mem_grant.ready    := false.B
-  io.dsf                := false.B
+  io.ise                := false.B
 
-  val dump_addr = p(ESerialKey).ctlBase.U
+  val dbc_head_q = dontTouch(Wire(UInt(16.W)))
+
+  dbc_head_q  := RegEnable(io.dbc.mask & (dbc_head_q + 1.U(16.W)),
+                           0.U,
+                           io.ise)
+
+  io.dbc.head := dbc_head_q
+
+  // os should guarantee that the db is properly aligned
+  val dbc_addr = io.dbc.base | (dbc_head_q ## (state === s_write_meta_req) ## 0.U(6.W))
 
   // --------------------------------------------
   //  state machine 
@@ -51,7 +61,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
 
     is (s_idle) {
       // accept exception requests and transition to mem write
-      req           := io.req.fire() ?? io.req.bits             :: -1.S.asTypeOf(new ExceptionPipeReq)
+      req           := io.req.fire() ?? io.req.bits             :: -1.S.asTypeOf(new DumpPipeReq)
       req_data      := io.req.fire() ?? io.req.bits.data.asUInt :: -1.S.asUInt
       state         := io.req.fire() ?? s_write_data_req        :: s_idle // spin in current state if no request comming in
     }
@@ -61,7 +71,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
       io.mem_acquire.valid := true.B
       io.mem_acquire.bits  := edge.Put(
         fromSource = 100.U(8.W),
-        toAddress  = dump_addr + ((2.U + io.hartId) << log2Up(cfg.blockBytes)),
+        toAddress  = dbc_addr,
         lgSize     = 6.U, // 64B cacheline
         data       = req_data,
         // mask       = req.wmask // if no mask, it is putFull, else it is putPartial
@@ -85,7 +95,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
       io.mem_acquire.valid := true.B
       io.mem_acquire.bits  := edge.Put(
         fromSource = 100.U(8.W),
-        toAddress  = dump_addr + ((2.U + io.hartId) << log2Up(cfg.blockBytes)),
+        toAddress  = dbc_addr,
         lgSize     = 4.U, // 16B <mask><addr>
         data       = req_meta,
       )._2
@@ -108,7 +118,7 @@ class ExceptionPipe(edge: TLEdgeOut)(implicit p: Parameters)
       io.resp.bits.replay := false.B
       io.resp.bits.id     := req.id
       io.resp.bits.err    := false.B
-      io.dsf              := true.B
+      io.ise              := true.B
       state               := s_idle
     }
   }
