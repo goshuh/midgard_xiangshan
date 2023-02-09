@@ -61,12 +61,12 @@ class AXI4Flash
 {
 
   override lazy val module = new AXI4SlaveModuleImp(this){
-    def getOffset(addr: UInt) = addr(15,0)
+    def getOffset(addr: UInt) = addr(27,0)
 
     val flash = Module(new FlashHelper)
     flash.clk := clock
     flash.ren := in.ar.fire()
-    flash.addr := Cat(0.U(16.W), getOffset(raddr))
+    flash.addr := Cat(0.U(5.W), getOffset(raddr))
 
     in.r.bits.data := flash.data
   }
