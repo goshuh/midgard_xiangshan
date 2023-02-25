@@ -190,6 +190,9 @@ trait HaveAXI4MemPort {
     TLBuffer() :=
     peripheralXbar
 
+  val rom = LazyModule(new Rom())
+  rom.node := peripheralXbar
+
   mmu.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
   err.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
 
@@ -238,6 +241,7 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
   ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange))
    .flatMap(_.subtract(mmuRange))
    .flatMap(_.subtract(errRange))
+   .flatMap(_.subtract(AddressSet(0x10000000L, 0xfffffff))) // rom
   val peripheralNode = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
     Seq(AXI4SlaveParameters(
       address = peripheralRange,
