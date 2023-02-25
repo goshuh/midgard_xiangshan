@@ -19,9 +19,8 @@ class RomBlackBoxIO extends Bundle {
 }
 
 // https://docs.xilinx.com/r/en-US/ug901-vivado-synthesis/ROM-HDL-Coding-Techniques
-class RomBlackBox extends BlackBox with HasBlackBoxPath {
+class RomBlackBox extends BlackBox{
   val io = IO(new RomBlackBoxIO)
-  addPath("../../repo/xiangshan/src/main/resources/rom.v")
 }
 
 class Rom(implicit p: Parameters) extends LazyModule {
