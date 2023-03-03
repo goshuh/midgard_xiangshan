@@ -190,11 +190,13 @@ trait HaveAXI4MemPort {
     TLBuffer() :=
     peripheralXbar
 
-  val rom = LazyModule(new Rom())
-  rom.node := peripheralXbar
-
   mmu.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
   err.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
+
+  if (p(BootRomKey).en) {
+    val rom = LazyModule(new BootRom())
+    rom.node := peripheralXbar
+  }
 
   memAXI4SlaveNode :=
     AXI4Buffer() :=

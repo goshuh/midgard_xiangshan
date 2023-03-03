@@ -11,7 +11,15 @@ import freechips.rocketchip.config._
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tilelink._
 
-class RomBlackBoxIO extends Bundle {
+case class BootRomParam(
+  en:      Boolean = false,
+  memBase: BigInt,
+  memSize: BigInt
+)
+
+case object BootRomKey extends Field[BootRomParam]
+
+class BootRomBlackBoxIO extends Bundle {
   val clk = Input(Clock())
   val en = Input(Bool())
   val we = Input(Bool())
@@ -21,18 +29,19 @@ class RomBlackBoxIO extends Bundle {
 }
 
 // https://docs.xilinx.com/r/en-US/ug901-vivado-synthesis/ROM-HDL-Coding-Techniques
-class RomBlackBox extends BlackBox{
-  val io = IO(new RomBlackBoxIO)
+class BootRomBlackBox extends BlackBox{
+  val io = IO(new BootRomBlackBoxIO)
 }
 
-class Rom(implicit p: Parameters) extends LazyModule {
+class BootRom(implicit p: Parameters) extends LazyModule {
 
+  val P = p(BootRomKey)
   val node = TLManagerNode(
     Seq(
       TLSlavePortParameters.v1(
         Seq(
           TLSlaveParameters.v1(
-            address = Seq(AddressSet(0x10000000L, 0xfffffff)),
+            address = Seq(AddressSet(P.memBase, P.memSize)),
             regionType = RegionType.UNCACHED,
             supportsGet = TransferSizes(1, 8),
             supportsPutFull = TransferSizes(1, 8),
@@ -48,7 +57,7 @@ class Rom(implicit p: Parameters) extends LazyModule {
 
   lazy val module = new LazyModuleImp(this) {
     val (i, ie) = node.in.head
-    val rom = Module(new RomBlackBox()).io
+    val rom = Module(new BootRomBlackBox()).io
     val rom_dbg = IO(Output(Bool()))
     rom_dbg  := i.a.fire
 
@@ -94,6 +103,7 @@ class Rom(implicit p: Parameters) extends LazyModule {
         state := write_resp
       }
       is(write_partial) {
+        // read then merge
         rom.en := true.B
         rom.addr := context.address(26,3)
         rom.we := true.B
@@ -118,6 +128,5 @@ class Rom(implicit p: Parameters) extends LazyModule {
         when(i.d.fire) { state := idle }
       }
     }
-
   }
 }
