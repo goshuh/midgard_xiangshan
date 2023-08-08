@@ -119,8 +119,8 @@ class CSRFileIO(implicit p: Parameters) extends XSBundle {
   val memExceptionVAddr = Input(UInt(VAddrBits.W))
   // from outside cpu,externalInterrupt
   val externalInterrupt = new ExternalInterruptIO
-  val ise = Flipped(new ISEIO())
-  val dbc = Flipped(new DBCIO())
+  val isec = Flipped(new ISECIO())
+  val fsbc = Flipped(new FSBCIO())
   // TLB
   val tlb = Output(new TlbCsrBundle)
   // Debug Mode
@@ -629,13 +629,13 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     perfCnts(28) := perfCnts(28) + Mux(s, r,   0.U)
   }
 
-  val sdbbase = dontTouch(Reg(UInt(64.W)))
-  val sdbmask = dontTouch(Reg(UInt(64.W)))
-  val sdbtail = dontTouch(Reg(UInt(64.W)))
+  val sfsbbase = dontTouch(Reg(UInt(64.W)))
+  val sfsbmask = dontTouch(Reg(UInt(64.W)))
+  val sfsbhead = dontTouch(Reg(UInt(64.W)))
 
-  csrio.dbc.base := sdbbase
-  csrio.dbc.mask := sdbmask
-  csrio.dbc.tail := sdbtail
+  csrio.fsbc.base := sfsbbase
+  csrio.fsbc.mask := sfsbmask
+  csrio.fsbc.head := sfsbhead
 
   // CSR reg map
   val basicPrivMapping = Map(
@@ -684,10 +684,10 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     MaskedRegMap(Smblockctl, smblockctl),
     MaskedRegMap(Srnctl, srnctl),
 
-    MaskedRegMap(Sdbbase, sdbbase),
-    MaskedRegMap(Sdbmask, sdbmask),
-    MaskedRegMap(Sdbhead, 0.U, wfn = null, rfn = _ => csrio.dbc.head),
-    MaskedRegMap(Sdbtail, sdbtail),
+    MaskedRegMap(Sfsbbase, sfsbbase),
+    MaskedRegMap(Sfsbmask, sfsbmask),
+    MaskedRegMap(Sfsbhead, sfsbhead),
+    MaskedRegMap(Sfsbtail, 0.U, wfn = null, rfn = _ => csrio.fsbc.tail),
 
     //--- Machine Information Registers ---
     MaskedRegMap(Mvendorid, mvendorid, 0.U(XLEN.W), MaskedRegMap.Unwritable),
@@ -972,7 +972,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   intrVecEnable.zip(ideleg.asBools).map{case(x,y) => x := priviledgedEnableDetect(y) && !disableInterrupt}
   val intrVec = Cat(debugIntr && !debugMode, (mie(11, 0) & mip.asUInt & intrVecEnable.asUInt))
   val intrBitSet = intrVec.orR
-  csrio.interrupt := intrBitSet || csrio.ise.valid
+  csrio.interrupt := intrBitSet || csrio.isec.valid
   // Page 45 in RISC-V Privileged Specification
   // The WFI instruction can also be executed when interrupts are disabled. The operation of WFI
   // must be unaffected by the global interrupt bits in mstatus (MIE and SIE) and the delegation
@@ -985,7 +985,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
 
   // interrupts
   val intrNO = IntPriority.foldRight(0.U)((i: Int, sum: UInt) => Mux(intrVec(i), i.U, sum))
-  val raiseIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt && !csrio.ise.valid
+  val raiseIntr = csrio.exception.valid && csrio.exception.bits.isInterrupt && !csrio.isec.valid
   val ivmEnable = tlbBundle.priv.imode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
   val iexceptionPC = Mux(ivmEnable, SignExt(csrio.exception.bits.uop.cf.pc, XLEN), csrio.exception.bits.uop.cf.pc)
   val dvmEnable = tlbBundle.priv.dmode < ModeM && satp.asTypeOf(new SatpStruct).mode === 8.U
@@ -994,7 +994,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val raiseDebugIntr = intrNO === IRQ_DEBUG.U && raiseIntr
 
   // exceptions
-  val ise_expt = csrio.exception.valid && csrio.exception.bits.isInterrupt && csrio.ise.valid
+  val ise_expt = csrio.exception.valid && csrio.exception.bits.isInterrupt && csrio.isec.valid
 
   val raiseException = csrio.exception.valid && !csrio.exception.bits.isInterrupt || ise_expt
   val hasInstrPageFault = csrio.exception.bits.uop.cf.exceptionVec(instrPageFault) && raiseException
@@ -1054,28 +1054,28 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   ise_fsm_nxt := ise_fsm_q
 
   val ise_taken = raiseException     && (exceptionNO    === delayedStoreFault.U)
-  val ise_other = raiseExceptionIntr && (priviledgeMode === ModeU) && !csrio.ise.empty && !ise_taken
+  val ise_other = raiseExceptionIntr && (priviledgeMode === ModeU) && !csrio.isec.empty && !ise_taken
 
   switch (ise_fsm_q) {
     is (ise_fsm_idle) {
-      ise_fsm_en  := ise_other || csrio.ise.expt
-      ise_fsm_nxt := Mux(ise_other && csrio.ise.expt, ise_fsm_coll,
-                     Mux(ise_other,                   ise_fsm_drain,
-                                                      ise_fsm_pend))
+      ise_fsm_en  := ise_other || csrio.isec.expt
+      ise_fsm_nxt := Mux(ise_other && csrio.isec.expt, ise_fsm_coll,
+                     Mux(ise_other,                    ise_fsm_drain,
+                                                       ise_fsm_pend))
     }
     is (ise_fsm_coll) {
-      ise_fsm_en  := csrio.ise.empty
+      ise_fsm_en  := csrio.isec.empty
       ise_fsm_nxt := ise_fsm_req
     }
     is (ise_fsm_drain) {
-      ise_fsm_en  := csrio.ise.expt || csrio.ise.empty
-      ise_fsm_nxt := Mux(csrio.ise.expt,  ise_fsm_coll,
-                                          ise_fsm_idle)
+      ise_fsm_en  := csrio.isec.expt || csrio.isec.empty
+      ise_fsm_nxt := Mux(csrio.isec.expt,  ise_fsm_coll,
+                                           ise_fsm_idle)
     }
     is (ise_fsm_pend) {
-      ise_fsm_en  := ise_other || csrio.ise.empty
-      ise_fsm_nxt := Mux(csrio.ise.empty, ise_fsm_req,
-                                          ise_fsm_coll)
+      ise_fsm_en  := ise_other || csrio.isec.empty
+      ise_fsm_nxt := Mux(csrio.isec.empty, ise_fsm_req,
+                                           ise_fsm_coll)
     }
     is (ise_fsm_req) {
       ise_fsm_en  := ise_taken
@@ -1090,11 +1090,11 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val ise_fsm_is_busy = ise_fsm_q(1, 0).orR
   val ise_fsm_is_req  = ise_fsm_q(2)
 
-  csrio.ise.valid := ise_fsm_is_req &&
-                       ((priviledgeMode === ModeU) ||
-                        (priviledgeMode === ModeS) && mstatusStruct.ie.s)
+  csrio.isec.valid := ise_fsm_is_req &&
+                        ((priviledgeMode === ModeU) ||
+                         (priviledgeMode === ModeS) && mstatusStruct.ie.s)
 
-  csrio.ise.drain := ise_fsm_is_busy
+  csrio.isec.drain := ise_fsm_is_busy
 
   // mtval write logic
   // Due to timing reasons of memExceptionVAddr, we delay the write of mtval and stval

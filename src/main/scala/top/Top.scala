@@ -112,11 +112,9 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
     ElaborationArtefacts.add("plusArgs", freechips.rocketchip.util.PlusArgArtefacts.serialize_cHeader())
 
     val dma = IO(Flipped(misc.dma.cloneType))
-    val peripheral = IO(misc.peripheral.cloneType)
     val memory = IO(misc.memory.cloneType)
 
     misc.dma <> dma
-    peripheral <> misc.peripheral
     memory <> misc.memory
 
     val io = IO(new Bundle {
@@ -149,7 +147,6 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
     // input
     dontTouch(dma)
     dontTouch(io)
-    dontTouch(peripheral)
     dontTouch(memory)
     misc.module.ext_intrs := io.extIntrs
     misc.module.rtc_clock := io.rtc_clock

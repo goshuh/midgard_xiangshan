@@ -414,8 +414,8 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val lsu = new DCacheToLsuIO
   val csr = new L1CacheToCsrIO
   val error = new L1CacheErrorInfo
-  val ise = Output(Bool())
-  val dbc = new DBCIO()
+  val ise  = Output(Bool())
+  val fsbc = new FSBCIO()
   val mshrFull = Output(Bool())
 }
 
@@ -434,14 +434,14 @@ class DCache()(implicit p: Parameters) extends LazyModule with HasDCacheParamete
 
   val clientNode = TLClientNode(Seq(clientParameters))
 
-  val dbcClientParameters = TLMasterPortParameters.v1(
+  val fsbcClientParameters = TLMasterPortParameters.v1(
     Seq(TLMasterParameters.v1(
-      name = "dbc",
+      name = "fsbc",
       sourceId = IdRange(0, 1),
     )),
   )
 
-  val dbcClientNode = TLClientNode(Seq(dbcClientParameters))
+  val fsbcClientNode = TLClientNode(Seq(fsbcClientParameters))
 
   lazy val module = new DCacheImp(this)
 }
@@ -453,7 +453,8 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   val (bus, edge) = outer.clientNode.out.head
   require(bus.d.bits.data.getWidth == l1BusDataWidth, "DCache: tilelink width does not match")
-  val (dbc_bus, dbc_edge) = outer.dbcClientNode.out.head
+
+  val (fsbc_bus, fsbc_edge) = outer.fsbcClientNode.out.head
 
   println("DCache:")
   println("  DCacheSets: " + DCacheSets)
@@ -480,17 +481,17 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   // val atomicsReplayUnit = Module(new AtomicsReplayEntry)
   val mainPipe   = Module(new MainPipe)
   val refillPipe = Module(new RefillPipe)
-  val dumpPipe   = Module(new DumpPipe(dbc_edge))
+  val fsbc       = Module(new FSBC(fsbc_edge))
   val missQueue  = Module(new MissQueue(edge))
   val probeQueue = Module(new ProbeQueue(edge))
   val wb         = Module(new WritebackQueue(edge))
 
-  dumpPipe.io.mem_grant <> dbc_bus.d
-  dbc_bus.a <> dumpPipe.io.mem_acquire
+  fsbc.io.mem_grant <> fsbc_bus.d
+  fsbc_bus.a <> fsbc.io.mem_acquire
 
   missQueue.io.hartId := io.hartId
-  io.ise := dumpPipe.io.ise
-  io.dbc <> dumpPipe.io.dbc
+  io.ise  := fsbc.io.ise
+  io.fsbc <> fsbc.io.fsbc
 
   val errors = ldu.map(_.io.error) ++ // load error
     Seq(mainPipe.io.error) // store / misc error 
@@ -634,13 +635,13 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   // block the req in main pipe
   block_decoupled(probeQueue.io.pipe_req, mainPipe.io.probe_req, missQueue.io.refill_pipe_req.valid)
 
-  val sb_norm = io.lsu.store.req.bits.cmd === MemoryOpConstants.M_XWR
-  val sb_dump = io.lsu.store.req.bits.cmd === MemoryOpConstants.M_DUMP
+  val sb_norm  = io.lsu.store.req.bits.cmd === MemoryOpConstants.M_XWR
+  val sb_drain = io.lsu.store.req.bits.cmd === MemoryOpConstants.M_DRAIN
 
   mainPipe.io.store_req.valid := io.lsu.store.req.valid && !refillPipe.io.req.valid && sb_norm
   mainPipe.io.store_req.bits  := io.lsu.store.req.bits
 
-  io.lsu.store.req.ready := mainPipe.io.store_req.ready && !refillPipe.io.req.valid || sb_dump
+  io.lsu.store.req.ready := mainPipe.io.store_req.ready && !refillPipe.io.req.valid || sb_drain
 
   io.lsu.store.replay_resp := RegNext(mainPipe.io.store_replay_resp)
   io.lsu.store.main_pipe_hit_resp := mainPipe.io.store_hit_resp
@@ -730,15 +731,15 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   replacer.access(touchSets, touchWays)
 
   //----------------------------------------
-  // dumpPipe <=> sbuffer
-  dumpPipe.io.req.valid      := io.lsu.store.req.valid && sb_dump
-  dumpPipe.io.req.bits.id    := io.lsu.store.req.bits.id
-  dumpPipe.io.req.bits.data  := io.lsu.store.req.bits.data
-  dumpPipe.io.req.bits.paddr := io.lsu.store.req.bits.addr
-  dumpPipe.io.req.bits.wmask := io.lsu.store.req.bits.mask
+  // fsbc <=> sbuffer
+  fsbc.io.req.valid      := io.lsu.store.req.valid && sb_drain
+  fsbc.io.req.bits.id    := io.lsu.store.req.bits.id
+  fsbc.io.req.bits.data  := io.lsu.store.req.bits.data
+  fsbc.io.req.bits.paddr := io.lsu.store.req.bits.addr
+  fsbc.io.req.bits.wmask := io.lsu.store.req.bits.mask
 
-  io.lsu.store.exception_ready := dumpPipe.io.req.ready
-  io.lsu.store.exception_resp  <> dumpPipe.io.resp
+  io.lsu.store.exception_ready := fsbc.io.req.ready
+  io.lsu.store.exception_resp  <> fsbc.io.resp
 
   //----------------------------------------
   // assertions
@@ -826,11 +827,11 @@ class DCacheWrapper()(implicit p: Parameters) extends LazyModule with HasXSParam
 
   val useDcache = coreParams.dcacheParametersOpt.nonEmpty
   val clientNode = if (useDcache) TLIdentityNode() else null
-  val dbcClientNode = if (useDcache) TLIdentityNode() else null
+  val fsbcClientNode = if (useDcache) TLIdentityNode() else null
   val dcache = if (useDcache) LazyModule(new DCache()) else null
   if (useDcache) {
-    clientNode    := dcache.clientNode
-    dbcClientNode := dcache.dbcClientNode
+    clientNode     := dcache.clientNode
+    fsbcClientNode := dcache.fsbcClientNode
   }
 
   lazy val module = new LazyModuleImp(this) with HasPerfEvents {

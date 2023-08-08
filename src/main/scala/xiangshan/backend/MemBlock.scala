@@ -74,8 +74,8 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val writeback = Vec(exuParameters.LsExuCnt + exuParameters.StuCnt, DecoupledIO(new ExuOutput))
     val delayedLoadError = Vec(exuParameters.LduCnt, Output(Bool()))
     val otherFastWakeup = Vec(exuParameters.LduCnt + 2 * exuParameters.StuCnt, ValidIO(new MicroOp))
-    val ise = new ISEIO()
-    val dbc = new DBCIO()
+    val isec = new ISECIO()
+    val fsbc = new FSBCIO()
     // misc
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
@@ -167,13 +167,13 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   sbuffer.io.hartId := io.hartId
   atomicsUnit.io.hartId := io.hartId
 
-  io.ise.expt  := dcache.io.ise
-  io.ise.empty := RegNext(sbuffer.io.ise.empty, true.B)
+  io.isec.expt  := dcache.io.ise
+  io.isec.empty := RegNext(sbuffer.io.isec.empty, true.B)
 
-  io.dbc       <> dcache.io.dbc
+  io.fsbc       <> dcache.io.fsbc
 
-  sbuffer.io.ise.drain := RegNext(io.ise.expt || io.ise.drain, false.B)
-  sbuffer.io.ise.valid := DontCare
+  sbuffer.io.isec.drain := RegNext(io.isec.expt || io.isec.drain, false.B)
+  sbuffer.io.isec.valid := DontCare
 
   // dtlb
   val sfence = RegNext(RegNext(io.sfence))
@@ -502,7 +502,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   val sb_flush_vld = sb_flush_set || sb_flush_q
 
   val sb_drain_q   = Wire(Bool())
-  val sb_drain_set = sb_flush_vld && io.ise.valid
+  val sb_drain_set = sb_flush_vld && io.isec.valid
   val sb_drain_vld = sb_drain_set || sb_drain_q
 
   sb_flush_q := RegEnable(sb_flush_set && !sb_flush_clr, false.B, sb_flush_set || sb_flush_clr)

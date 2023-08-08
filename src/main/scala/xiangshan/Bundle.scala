@@ -472,18 +472,18 @@ class MemPredUpdateReq(implicit p: Parameters) extends XSBundle  {
   val stpc = UInt(MemPredPCWidth.W)
 }
 
-class ISEIO(implicit p: Parameters) extends XSBundle {
+class ISECIO(implicit p: Parameters) extends XSBundle {
   val expt  = Output(Bool())
   val empty = Output(Bool())
   val drain = Input (Bool())
   val valid = Input (Bool())
 }
 
-class DBCIO(implicit p: Parameters) extends XSBundle {
+class FSBCIO(implicit p: Parameters) extends XSBundle {
   val base  = Input (UInt(XLEN.W))
   val mask  = Input (UInt(XLEN.W))
-  val head  = Output(UInt(XLEN.W))
-  val tail  = Input (UInt(XLEN.W))
+  val head  = Input (UInt(XLEN.W))
+  val tail  = Output(UInt(XLEN.W))
 }
 
 class CustomCSRCtrlIO(implicit p: Parameters) extends XSBundle {

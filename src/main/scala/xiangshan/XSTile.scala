@@ -122,7 +122,7 @@ class XSTile()(implicit p: Parameters) extends LazyModule
   } else None
 
   // put goes to l2
-  misc.busPMU := TLWidthWidget(64) := core.memBlock.dcache.dbcClientNode
+  misc.busPMU := TLWidthWidget(64) := core.memBlock.dcache.fsbcClientNode
 
   l2cache match {
     case Some(l2) =>

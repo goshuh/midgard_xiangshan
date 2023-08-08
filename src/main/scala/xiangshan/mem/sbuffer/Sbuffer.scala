@@ -116,7 +116,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     val sqempty = Input(Bool())
     val flush = Flipped(new SbufferFlushBundle)
     val csrCtrl = Flipped(new CustomCSRCtrlIO)
-    val ise = new ISEIO()
+    val isec = new ISECIO()
   })
 
   val dataModule = Module(new SbufferData)
@@ -251,10 +251,10 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   ) // slow to generate, for debug only
   val canInserts = (0 until EnsbufferWidth).map(i =>
     PriorityMuxDefault(if (i == 0) Seq(0.B -> 0.B) else (0 until i).map(j => sameTag(i)(j) -> remCanInsert(enbufferSelReg + j.U)), remCanInsert(enbufferSelReg + i.U))
-  ).map(_ && ((sbuffer_state =/= x_drain_sbuffer) || io.ise.drain))
+  ).map(_ && ((sbuffer_state =/= x_drain_sbuffer) || io.isec.drain))
   val forward_need_uarch_drain = WireInit(false.B)
   val merge_need_uarch_drain = WireInit(false.B)
-  val do_uarch_drain = RegNext(forward_need_uarch_drain) || RegNext(RegNext(merge_need_uarch_drain)) || io.ise.drain && !io.ise.empty
+  val do_uarch_drain = RegNext(forward_need_uarch_drain) || RegNext(RegNext(merge_need_uarch_drain)) || io.isec.drain && !io.isec.empty
   XSPerfAccumulate("do_uarch_drain", do_uarch_drain)
 
   (0 until EnsbufferWidth).foreach(i =>
@@ -432,12 +432,12 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
 
   // delayed store fault request
   val store_faults = VecInit(stateVec.map(s => s.isStoreFault()))
-  val need_dump = Wire(Bool())
-  val dump_idx  = PriorityEncoder(store_faults)
+  val drain_req = Wire(Bool())
+  val drain_idx = PriorityEncoder(store_faults)
 
   val need_drain = needDrain(sbuffer_state)
   val need_replace = do_eviction || (sbuffer_state === x_replace)
-  val evictionIdx = Mux(need_dump, dump_idx, Mux(missqReplayHasTimeOut,
+  val evictionIdx = Mux(drain_req, drain_idx, Mux(missqReplayHasTimeOut,
     missqReplayTimeOutIdxReg,
     Mux(need_drain,
       drainIdx,
@@ -449,7 +449,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
       If there is a inflight dcache req which has same ptag with evictionIdx's ptag,
       current eviction should be blocked.
    */
-  val prepareValid = need_dump || missqReplayHasTimeOut || 
+  val prepareValid = drain_req || missqReplayHasTimeOut || 
     stateVec(evictionIdx).isDcacheReqCandidate() && (need_drain || cohHasTimeOut || need_replace)
   assert(!(stateVec(evictionIdx).isDcacheReqCandidate && !noSameBlockInflight(evictionIdx)))
   val prepareValidReg = RegInit(false.B)
@@ -463,7 +463,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   when(canSendDcacheReq){
     prepareValidReg := prepareValid
   }
-  when(willSendDcacheReq && !need_dump){
+  when(willSendDcacheReq && !drain_req){
     stateVec(evictionIdx).state_inflight := true.B
     stateVec(evictionIdx).w_timeout := false.B
     // stateVec(evictionIdx).s_pipe_req := true.B
@@ -481,21 +481,21 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   val evictionIdxReg = RegEnable(evictionIdx, willSendDcacheReq)
   val evictionPTag = RegEnable(ptag(evictionIdx), willSendDcacheReq)
   val evictionVTag = RegEnable(vtag(evictionIdx), willSendDcacheReq)
-  val evictionDump = RegEnable(need_dump, false.B, willSendDcacheReq)
+  val evictionDrain = RegEnable(drain_req, false.B, willSendDcacheReq)
 
   io.dcache.req.valid := prepareValidReg
   io.dcache.req.bits := DontCare
-  io.dcache.req.bits.cmd    := Mux(evictionDump, MemoryOpConstants.M_DUMP, MemoryOpConstants.M_XWR)
+  io.dcache.req.bits.cmd    := Mux(evictionDrain, MemoryOpConstants.M_DRAIN, MemoryOpConstants.M_XWR)
   io.dcache.req.bits.addr   := getAddr(evictionPTag)
   io.dcache.req.bits.vaddr   := getAddr(evictionVTag)
   io.dcache.req.bits.data  := data(evictionIdxReg).asUInt
   io.dcache.req.bits.mask  := mask(evictionIdxReg).asUInt
   io.dcache.req.bits.id := evictionIdxReg
 
-  need_dump := store_faults.asUInt.orR && io.dcache.exception_ready && !RegNext(willSendDcacheReq && need_dump, false.B)
+  drain_req := store_faults.asUInt.orR && io.dcache.exception_ready && !RegNext(willSendDcacheReq && drain_req, false.B)
 
-  io.ise.expt  := false.B
-  io.ise.empty := sbuffer_empty && io.sqempty
+  io.isec.expt  := false.B
+  io.isec.empty := sbuffer_empty && io.sqempty
 
   when (io.dcache.req.fire()) {
     assert(!(io.dcache.req.bits.vaddr === 0.U))

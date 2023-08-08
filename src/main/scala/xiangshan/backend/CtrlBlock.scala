@@ -238,7 +238,7 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
     val redirect = ValidIO(new Redirect)
     val debug_int_rat = Vec(32, Output(UInt(PhyRegIdxWidth.W)))
     val debug_fp_rat = Vec(32, Output(UInt(PhyRegIdxWidth.W)))
-    val ise = new ISEIO()
+    val isec = new ISECIO()
   })
 
   override def writebackSource: Option[Seq[Seq[Valid[ExuOutput]]]] = {
@@ -512,8 +512,8 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
 
   io.redirect <> stage2Redirect
 
-  dispatch.io.ise := io.ise.drain
-  rob     .io.ise := io.ise.valid
+  dispatch.io.ise := io.isec.drain
+  rob     .io.ise := io.isec.valid
 
   // rob to int block
   io.robio.toCSR <> rob.io.csr

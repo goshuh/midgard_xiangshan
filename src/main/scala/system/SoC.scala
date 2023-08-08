@@ -222,22 +222,9 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
     resources = uartDevice.reg
   )
 
-  val mmuRange = AddressSet(p(MidgardKey).ctlBase, p(MidgardKey).ctlSize)
-  val errRange = AddressSet(p(EInjectKey).ctlBase, p(EInjectKey).ctlSize)
-
-  ResourceBinding {
-    // add interrupt
-    uartDevice.int.head.bind(this.plic.device, ResourceInt(1))
-
-    Resource(SoCResourceAnchors.chosen, "bootargs").bind(ResourceString("earlycon console=ttyUL0"))
-    Resource(SoCResourceAnchors.chosen, "stdout"  ).bind(ResourceAlias(uartDevice.label))
-  }
-
   val peripheralRange = AddressSet(
     0x0, 0x7fffffff
   ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange))
-   .flatMap(_.subtract(mmuRange))
-   .flatMap(_.subtract(errRange))
   val peripheralNode = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
     Seq(AXI4SlaveParameters(
       address = peripheralRange,
@@ -266,7 +253,6 @@ trait HaveAXI4PeripheralPort { this: BaseSoC =>
 
 class SoCMisc()(implicit p: Parameters) extends BaseSoC
   with HaveAXI4MemPort
-  with HaveAXI4PeripheralPort
   with PMAConst
   with HaveSlaveAXI4Port
 {
