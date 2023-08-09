@@ -24,7 +24,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                        supportsPutFull    = TransferSizes(1, 8),
                        supportsPutPartial = TransferSizes(1, 8),
                        fifoId             = Some(0),
-                       resources          = new SimpleDevice("midgard", Seq("midgard.bmmu")).reg)),
+                       resources          = new SimpleDevice("bmmu", Seq("midgard.bmmu")).reg)),
                      beatBytes = 8)))
 
   // only support llc as the single master

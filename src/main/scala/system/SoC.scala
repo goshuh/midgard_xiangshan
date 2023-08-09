@@ -175,11 +175,9 @@ trait HaveAXI4MemPort {
   val mem_xbar = TLXbar()
 
   val mmu = if (p(MidgardKey).en) Some(LazyModule(new BSMMUWrapper())) else None
-  val err = if (p(EInjectKey).en) Some(LazyModule(new EInject()     )) else None
 
   val mem_nodes =
     Seq(mem_xbar, TLBuffer()) ++
-      err.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq()) ++
       mmu.map(e => Seq(TLWidthWidget(64), e.adp_node)).getOrElse(Seq(TLCacheCork())) ++
     Seq(TLWidthWidget(32), bankedNode)
 
@@ -191,7 +189,6 @@ trait HaveAXI4MemPort {
     peripheralXbar
 
   mmu.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
-  err.foreach(_.ctl_node := TLWidthWidget(8) := peripheralXbar)
 
   memAXI4SlaveNode :=
     AXI4Buffer() :=
