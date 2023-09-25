@@ -43,8 +43,8 @@ class FSPTWWrapper(N: Int, P: Param)(implicit p: Parameters) extends LazyModule
     u_ptw.satp_i <> satp_i
 
     for (i <- 0 until N) {
-      u_ptw.vlb_req_i (i) <> vlb_i(i).ptw_req_o
-      u_ptw.vlb_resp_o(i) <> vlb_i(i).ptw_resp_i
+      u_ptw.vlb_req_i(i) <> vlb_i(i).ptw_req_o
+      u_ptw.vlb_res_o(i) <> vlb_i(i).ptw_res_i
     }
 
 
@@ -54,17 +54,17 @@ class FSPTWWrapper(N: Int, P: Param)(implicit p: Parameters) extends LazyModule
     val (mem, edge) = node.out.head
 
     // a channel
-    mem.a.valid                := u_ptw.mem_req_o.valid
-    mem.a.bits                 := edge.Get(0.U,
-                                           u_ptw.mem_req_o.bits.mcn ## 0.U(6.W),
-                                           6.U)._2
+    mem.a.valid               := u_ptw.mem_req_o.valid
+    mem.a.bits                := edge.Get(0.U,
+                                          u_ptw.mem_req_o.bits.mcn ## 0.U(6.W),
+                                          6.U)._2
 
-    u_ptw.mem_req_o.ready      := mem.a.ready
+    u_ptw.mem_req_o.ready     := mem.a.ready
 
     // d channel
-    u_ptw.mem_resp_i.valid     := mem.d.valid
-    u_ptw.mem_resp_i.bits.data := mem.d.bits.data
+    u_ptw.mem_res_i.valid     := mem.d.valid
+    u_ptw.mem_res_i.bits.data := mem.d.bits.data
 
-    mem.d.ready                := u_ptw.mem_resp_i.ready
+    mem.d.ready               := u_ptw.mem_res_i.ready
   }
 }

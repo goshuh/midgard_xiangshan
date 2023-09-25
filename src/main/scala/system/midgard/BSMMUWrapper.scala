@@ -68,7 +68,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
       (fsm_idle ::
        fsm_req  ::
        fsm_pend ::
-       fsm_resp ::
+       fsm_res  ::
        fsm_null) = Enum(4)
 
 
@@ -84,18 +84,18 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val u_mmu = Module(new backside.MMU(P))
 
     val llc_req   = u_mmu.llc_req_i
-    val llc_resp  = u_mmu.llc_resp_o
+    val llc_res   = u_mmu.llc_res_o
     val prb_req   = u_mmu.llc_req_o
-    val prb_resp  = u_mmu.llc_resp_i
+    val prb_res   = u_mmu.llc_res_i
     val mem_req   = u_mmu.mem_req_o
-    val mem_resp  = u_mmu.mem_resp_i
+    val mem_res   = u_mmu.mem_res_i
 
 
     //
     // ctl
 
     val ctl_req   = c.a.fire
-    val ctl_resp  = c.d.fire
+    val ctl_res   = c.d.fire
 
     val ctl_sel   = Dec(c.a.bits.address(6, 3))
     val ctl_rnw   = c.a.bits.opcode === TLMessages.Get
@@ -125,16 +125,16 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
 
     val inv_wen = ctl_wen && ctl_sel(7)
 
-    val ctl_norm_q    = RegEnable(ctl_req && !inv_wen,
-                                  false.B,
-                                  ctl_req ||  ctl_resp)
+    val ctl_reg_q   = RegEnable(ctl_req && !inv_wen,
+                                 false.B,
+                                 ctl_req ||  ctl_res)
 
-    val ctl_norm_resp = ctl_rnw_q ??
-                            ce.AccessAck(ctl_src_q,
-                                         3.U,
-                                         RegEnable(ctl_rdata, ctl_req)) ::
-                            ce.AccessAck(ctl_src_q,
-                                         3.U)
+    val ctl_reg_res = ctl_rnw_q ??
+                          ce.AccessAck(ctl_src_q,
+                                       3.U,
+                                       RegEnable(ctl_rdata, ctl_req)) ::
+                          ce.AccessAck(ctl_src_q,
+                                       3.U)
 
     u_mmu.ctl_i := ctl_q
     u_mmu.rst_i := RegNext(ctl_wen && Any(ctl_sel(6.W)))
@@ -163,10 +163,10 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
       }
       is (fsm_pend) {
         inv_fsm_en  := chc_inv
-        inv_fsm_nxt := fsm_resp
+        inv_fsm_nxt := fsm_res
       }
-      is (fsm_resp) {
-        inv_fsm_en  := c.d.ready && !ctl_norm_q
+      is (fsm_res) {
+        inv_fsm_en  := c.d.ready && !ctl_reg_q
         inv_fsm_nxt := fsm_idle
       }
     }
@@ -174,20 +174,20 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val inv_fsm_is_idle = inv_fsm_q === fsm_idle
     val inv_fsm_is_req  = inv_fsm_q === fsm_req
     val inv_fsm_is_pend = inv_fsm_q === fsm_pend
-    val inv_fsm_is_resp = inv_fsm_q === fsm_resp
+    val inv_fsm_is_res  = inv_fsm_q === fsm_res
 
     inv_fsm_q := RegEnable(inv_fsm_nxt, fsm_idle,          inv_fsm_en)
     inv_mcn_q := RegEnable(ctl_wdata(P.maBits := P.clWid), inv_wen)
 
-    val inv_resp_vld = inv_fsm_is_resp
-    val inv_resp     = ce.AccessAck(ctl_src_q,
-                                    3.U)
+    val inv_res_vld = inv_fsm_is_res
+    val inv_res     = ce.AccessAck(ctl_src_q,
+                                   3.U)
 
     // force serialization
     c.a.ready   := inv_fsm_is_idle
 
-    c.d.valid   := ctl_norm_q || inv_resp_vld
-    c.d.bits    := ctl_norm_q ?? ctl_norm_resp :: inv_resp
+    c.d.valid   := ctl_reg_q || inv_res_vld
+    c.d.bits    := ctl_reg_q ?? ctl_reg_res :: inv_res
 
 
     //
@@ -198,12 +198,12 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     if (P.bsSkip) {
       val mem_scb_q  = dontTouch(Wire(Vec(M, Bool())))
 
-      val mem_dec_req  = Dec(o.a.bits.source)
-      val mem_dec_resp = Dec(o.d.bits.source)
+      val mem_dec_req = Dec(o.a.bits.source)
+      val mem_dec_res = Dec(o.d.bits.source)
 
       for (i <- 0 until M) {
-        val set = o.a.fire && mem_dec_req (i)
-        val clr = o.d.fire && mem_dec_resp(i)
+        val set = o.a.fire && mem_dec_req(i)
+        val clr = o.d.fire && mem_dec_res(i)
 
         mem_scb_q(i) := RegEnable(set && !clr,
                                   false.B,
@@ -226,17 +226,17 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                               mem_req.bits.siz,
                               mem_req.bits.data)._2
 
-    mem_req.ready  := o.a.ready  && mem_req_qual
+    mem_req.ready := o.a.ready  && mem_req_qual
 
-    mem_resp.valid := o.d.valid
-    mem_resp.bits  := backside.MemResp(P,
-                                       o.d.bits.source,
-                                       o.d.bits.corrupt || o.d.bits.denied,
-                                       o.d.bits.opcode === TLMessages.AccessAckData,
-                                       o.d.bits.size,
-                                       o.d.bits.data)
+    mem_res.valid := o.d.valid
+    mem_res.bits  := backside.MemRes(P,
+                                     o.d.bits.source,
+                                     o.d.bits.corrupt || o.d.bits.denied,
+                                     o.d.bits.opcode === TLMessages.AccessAckData,
+                                     o.d.bits.size,
+                                     o.d.bits.data)
 
-    o.d.ready   := mem_resp.ready
+    o.d.ready   := mem_res.ready
 
 
     //
@@ -307,8 +307,8 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                 TLPermissions.toT)._2
 
     // c channel
-    i.c.ready   := chc_mis_req_raw && (chc_sel_inv ?? true.B      :: prb_resp.ready) ||
-                   chc_hit_req_raw && (chc_sel_inv ?? chc_wrb_gnt :: prb_resp.ready) ||
+    i.c.ready   := chc_mis_req_raw && (chc_sel_inv ?? true.B      :: prb_res.ready) ||
+                   chc_hit_req_raw && (chc_sel_inv ?? chc_wrb_gnt :: prb_res.ready) ||
                    chc_cev_req_raw &&  chc_cev_gnt ||
                    chc_dev_req_raw &&  chc_dev_gnt
 
@@ -318,14 +318,14 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     chc_cev_gnt := i.d.ready
 
     // priority: cev/dev > acq
-    val llc_resp_sel_chd = dontTouch(Wire(Bool()))
-    val llc_resp_sel_pxd = dontTouch(Wire(Bool()))
+    val llc_res_sel_chd = dontTouch(Wire(Bool()))
+    val llc_res_sel_pxd = dontTouch(Wire(Bool()))
 
-    val chd_sel_dev = chd_acq_req && !llc_resp.bits.rnw && !llc_resp_sel_pxd
-    val chd_sel_pxd = chd_acq_req && !llc_resp.bits.rnw &&  llc_resp_sel_pxd
+    val chd_sel_dev = chd_acq_req && !llc_res.bits.rnw && !llc_res_sel_pxd
+    val chd_sel_pxd = chd_acq_req && !llc_res.bits.rnw &&  llc_res_sel_pxd
 
-    chd_acq_req := llc_resp.valid &&  llc_resp_sel_chd
-    chd_acq_gnt := chc_cev_gnt    && !chc_cev_req
+    chd_acq_req := llc_res.valid &&  llc_res_sel_chd
+    chd_acq_gnt := chc_cev_gnt   && !chc_cev_req
 
     i.d.valid   := chc_cev_req || chd_acq_req
     i.d.bits    := chc_cev_req ??
@@ -333,20 +333,20 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                      i.c.bits.size,
                                      false.B) ::
                    chd_sel_dev ??
-                       ie.ReleaseAck(llc_resp.bits.idx,
-                                     llc_resp.bits.siz,
-                                     llc_resp.bits.err) ::
+                       ie.ReleaseAck(llc_res.bits.idx,
+                                     llc_res.bits.siz,
+                                     llc_res.bits.err) ::
                    chd_sel_pxd ??
-                       ie.AccessAck (llc_resp.bits.idx,
-                                     llc_resp.bits.siz,
-                                     llc_resp.bits.err) ::
-                       ie.Grant(llc_resp.bits.idx,
-                                llc_resp.bits.idx,
-                                llc_resp.bits.siz,
+                       ie.AccessAck (llc_res.bits.idx,
+                                     llc_res.bits.siz,
+                                     llc_res.bits.err) ::
+                       ie.Grant(llc_res.bits.idx,
+                                llc_res.bits.idx,
+                                llc_res.bits.siz,
                                 TLPermissions.toT,
-                                llc_resp.bits.data,
-                                llc_resp.bits.err,
-                                llc_resp.bits.err)
+                                llc_res.bits.data,
+                                llc_res.bits.err,
+                                llc_res.bits.err)
 
     // e channel
     i.e.ready   := true.B
@@ -364,30 +364,28 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val llc_sel_chc = chc_dev_req ||
                       chc_wrb_req
 
-    llc_req.valid  := llc_sel_chc ||
-                      cha_acq_req ||
-                      cha_pfd_req ||
-                      cha_ppd_req
+    llc_req.valid := llc_sel_chc ||
+                     cha_acq_req ||
+                     cha_pfd_req ||
+                     cha_ppd_req
 
-    llc_req.bits   := llc_sel_chc ??
-                          backside.MemReq(P,
-                                          i.c.bits.source,
-                                          false.B,
-                                          i.c.bits.size,
-                                          i.c.bits.address(P.maBits := P.clWid),
-                                          0.U,
-                                          i.c.bits.data,
-                                         ~0.U(P.clBytes.W),
-                                          P.llcIdx) ::
-                          backside.MemReq(P,
-                                          i.a.bits.source,
-                                          cha_acq_req_raw,
-                                          i.a.bits.size,
-                                          i.a.bits.address(P.maBits := P.clWid),
-                                          0.U,
-                                          i.a.bits.data,
-                                          i.a.bits.mask,
-                                          P.llcIdx)
+    llc_req.bits  := llc_sel_chc ??
+                         backside.MemReq(P,
+                                         i.c.bits.source,
+                                         false.B,
+                                         i.c.bits.size,
+                                         i.c.bits.address(P.maBits := P.clWid),
+                                         0.U,
+                                         i.c.bits.data,
+                                         P.llcIdx) ::
+                         backside.MemReq(P,
+                                         i.a.bits.source,
+                                         cha_acq_req_raw,
+                                         i.a.bits.size,
+                                         i.a.bits.address(P.maBits := P.clWid),
+                                         0.U,
+                                         i.a.bits.data,
+                                         P.llcIdx)
 
     val llc_req_sel_pxd = cha_acq_gnt && (cha_pfd_req ||
                                           cha_ppd_req)
@@ -396,33 +394,33 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                           cha_acq_gnt &&  cha_acq_req ||
                           llc_req_sel_pxd
 
-    val llc_dec_req   = Dec(llc_req.bits.idx )(M.W)
-    val llc_dec_resp  = Dec(llc_resp.bits.idx)(M.W)
+    val llc_dec_req  = Dec(llc_req.bits.idx)(M.W)
+    val llc_dec_res  = Dec(llc_res.bits.idx)(M.W)
 
-    val llc_sel_req   = EnQ(llc_req.fire,  llc_dec_req)
-    val llc_sel_resp  = EnQ(llc_resp.fire, llc_dec_resp)
+    val llc_sel_req  = EnQ(llc_req.fire, llc_dec_req)
+    val llc_sel_res  = EnQ(llc_res.fire, llc_dec_res)
 
-    llc_resp_sel_chd := OrM(llc_dec_resp,
-                            Seq.tabulate(M) { i =>
-                              Src(llc_sel_req(i), llc_sel_resp(i), llc_req_sel_chd)
-                            })
+    llc_res_sel_chd := OrM(llc_dec_res,
+                           Seq.tabulate(M) { i =>
+                             Src(llc_sel_req(i), llc_sel_res(i), llc_req_sel_chd)
+                           })
 
-    llc_resp_sel_pxd := OrM(llc_dec_resp,
-                            Seq.tabulate(M) { i =>
-                              Src(llc_sel_req(i), llc_sel_resp(i), llc_req_sel_pxd)
-                            })
+    llc_res_sel_pxd := OrM(llc_dec_res,
+                           Seq.tabulate(M) { i =>
+                             Src(llc_sel_req(i), llc_sel_res(i), llc_req_sel_pxd)
+                           })
 
     // llc resp
-    llc_resp.ready := llc_resp_sel_chd && chd_acq_gnt ||
-                     !llc_resp_sel_chd
+    llc_res.ready := llc_res_sel_chd && chd_acq_gnt ||
+                    !llc_res_sel_chd
 
     // prb req
-    prb_req.ready  := chb_prb_gnt
+    prb_req.ready := chb_prb_gnt
 
     // prb resp
-    prb_resp.valid := chc_mis_req || chc_hit_req
-    prb_resp.bits  := backside.LLCResp(P,
-                                       chc_hit_req,
-                                       i.c.bits.data)
+    prb_res.valid := chc_mis_req || chc_hit_req
+    prb_res.bits  := backside.LLCRes(P,
+                                     chc_hit_req,
+                                     i.c.bits.data)
   }
 }

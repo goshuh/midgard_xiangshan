@@ -119,7 +119,7 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   }
 
   io.ptw_mg.ptw_req_o   <> ivlb.ptw_req_o
-  io.ptw_mg.ptw_resp_i  <> ivlb.ptw_resp_i
+  io.ptw_mg.ptw_res_i   <> ivlb.ptw_res_i
 
   icache.io.itlb(0)     <> ivlb.tlb_i(0)
   icache.io.itlb(1)     <> ivlb.tlb_i(1)

@@ -13,8 +13,8 @@ import  chipsalliance.rocketchip.config._
 
 
 class FSPTWIO(P: Param) extends Bundle {
-  val ptw_req_o  =         Decoupled(new frontside.VLBReq(P))
-  val ptw_resp_i = Flipped(    Valid(new frontside.VMA(P)))
+  val ptw_req_o =         Decoupled(new frontside.VLBReq(P))
+  val ptw_res_i = Flipped(    Valid(new frontside.VMA(P)))
 }
 
 
@@ -25,18 +25,18 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
   // --------------------------
   // io
 
-  val sfence_i   = IO(                   Input(new SfenceBundle))
-  val csr_i      = IO(                   Input(new TlbCsrBundle))
-  val flush_i    = IO(                   Input(Bool()))
+  val sfence_i  = IO(                   Input(new SfenceBundle))
+  val csr_i     = IO(                   Input(new TlbCsrBundle))
+  val flush_i   = IO(                   Input(Bool()))
 
-  val tlb_i      = IO(Vec(N, Flipped(          new TlbRequestIO)))
-  val tlb_o      = IO(Vec(N,                   new TlbRequestIO))
+  val tlb_i     = IO(Vec(N, Flipped(          new TlbRequestIO)))
+  val tlb_o     = IO(Vec(N,                   new TlbRequestIO))
 
-  val pmp_i      = IO(Vec(N, Flipped(          new PMPRespBundle)))
-  val pmp_o      = IO(Vec(N,                   new PMPRespBundle))
+  val pmp_i     = IO(Vec(N, Flipped(          new PMPRespBundle)))
+  val pmp_o     = IO(Vec(N,                   new PMPRespBundle))
 
-  val ptw_req_o  = IO(               Decoupled(new frontside.VLBReq(P)))
-  val ptw_resp_i = IO(       Flipped(    Valid(new frontside.VMA(P))))
+  val ptw_req_o = IO(               Decoupled(new frontside.VLBReq(P)))
+  val ptw_res_i = IO(       Flipped(    Valid(new frontside.VMA(P))))
 
 
   // --------------------------
@@ -70,7 +70,7 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
   u_vlb.kill_asid_i := sfence_i.bits.asid
 
   ptw_req_o         <> u_vlb.ptw_req_o
-  ptw_resp_i        <> u_vlb.ptw_resp_i
+  ptw_res_i         <> u_vlb.ptw_res_i
 
 
   //
@@ -91,18 +91,18 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
 
   // midgard connection
   for (i <- 0 until N) {
-    val vlb_req  = u_vlb.vlb_req_i (i)
-    val vlb_resp = u_vlb.vlb_resp_o(i)
-    val vlb_fill = u_vlb.vlb_fill_o
+    val vlb_req  = u_vlb.vlb_req_i(i)
+    val vlb_res  = u_vlb.vlb_res_o(i)
+    val vlb_ptw  = u_vlb.vlb_ptw_o
 
     val tlb_req  = tlb_i(i).req
-    val tlb_resp = tlb_i(i).resp
+    val tlb_res  = tlb_i(i).resp
     val tlb_kill = tlb_i(i).req_kill || flush_q || sel_to_xs
 
     val tlb_vpn  = tlb_req.bits.vaddr(VAddrBits := 12)
     val tlb_offs = tlb_req.bits.vaddr(12.W)
 
-    val pmp_resp = pmp_o(i)
+    val pmp_res  = pmp_o(i)
 
     val req_vld  = dontTouch(Wire(Bool()))
     val req_vpn  = dontTouch(Wire(UInt((VAddrBits - 12).W)))
@@ -127,7 +127,7 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
 
       // upstream issues random reqs. always stick to the oldest one
       vld_new  := tlb_req.fire
-      vld_old  := vld_q && !tlb_resp.fire
+      vld_old  := vld_q && !tlb_res.fire
 
       req_vld  := vld_raw
       req_vpn  := vld_old  ??  RegEnable(tlb_vpn,          vld_new) :: tlb_vpn
@@ -135,13 +135,13 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
       req_kill := tlb_kill ## (flush ||  vld_new && tlb_req.bits.kill)
 
       when (sel_mg) {
-        tlb_req.ready := tlb_resp.fire || !vld_q
+        tlb_req.ready := tlb_res.fire || !vld_q
 
         // also fake a response for flush
-        tlb_resp.valid          := vlb_resp.valid && vlb_resp.bits.vld || vld_q && flush_q
-        tlb_resp.bits.paddr     := vlb_resp.bits.mpn ## RegEnable(tlb_offs, vld_new)
-        tlb_resp.bits.miss      := false.B
-        tlb_resp.bits.fast_miss := false.B
+        tlb_res.valid          := vlb_res.valid && vlb_res.bits.vld || vld_q && flush_q
+        tlb_res.bits.paddr     := vlb_res.bits.mpn ## RegEnable(tlb_offs, vld_new)
+        tlb_res.bits.miss      := false.B
+        tlb_res.bits.fast_miss := false.B
       }
 
     } else {
@@ -153,10 +153,10 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
       when (sel_mg) {
         tlb_req.ready := true.B
 
-        tlb_resp.valid          :=     vlb_resp.valid
-        tlb_resp.bits.paddr     :=     vlb_resp.bits.mpn ## RegNext(tlb_offs)
-        tlb_resp.bits.miss      := Non(vlb_resp.bits.vld)
-        tlb_resp.bits.fast_miss := Non(vlb_resp.bits.vld)
+        tlb_res.valid          :=     vlb_res.valid
+        tlb_res.bits.paddr     :=     vlb_res.bits.mpn ## RegNext(tlb_offs)
+        tlb_res.bits.miss      := Non(vlb_res.bits.vld)
+        tlb_res.bits.fast_miss := Non(vlb_res.bits.vld)
       }
     }
 
@@ -169,33 +169,33 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
       val cmd_st = TlbCmd.isWrite(req_cmd) ||  TlbCmd.isAmo(req_cmd)
       val cmd_if = TlbCmd.isExec (req_cmd)
 
-      val perm_r = vlb_resp.bits.attr(1)
-      val perm_w = vlb_resp.bits.attr(2)
-      val perm_x = vlb_resp.bits.attr(3)
-      val perm_u = vlb_resp.bits.attr(4)
-      val perm_g = vlb_resp.bits.attr(5)
-      val perm_a = vlb_resp.bits.attr(6)
-      val perm_d = vlb_resp.bits.attr(7)
+      val perm_r = vlb_res.bits.attr(1)
+      val perm_w = vlb_res.bits.attr(2)
+      val perm_x = vlb_res.bits.attr(3)
+      val perm_u = vlb_res.bits.attr(4)
+      val perm_g = vlb_res.bits.attr(5)
+      val perm_a = vlb_res.bits.attr(6)
+      val perm_d = vlb_res.bits.attr(7)
 
-      val pf     = vlb_resp.bits.err ||
+      val pf     = vlb_res.bits.err ||
                   (mode === ModeS) &&  perm_u && (!priv.sum || P.tlbEn.B) ||
                   (mode === ModeU) && !perm_u
 
-      tlb_resp.bits.excp.pf.ld      := pf || cmd_ld && !(perm_a &&          (perm_r || priv.mxr && perm_x))
-      tlb_resp.bits.excp.pf.st      := pf || cmd_st && !(perm_a && perm_d && perm_w)
-      tlb_resp.bits.excp.pf.instr   := pf || cmd_if && !(perm_a &&           perm_x)
-      tlb_resp.bits.excp.af.ld      := false.B
-      tlb_resp.bits.excp.af.st      := false.B
-      tlb_resp.bits.excp.af.instr   := false.B
+      tlb_res.bits.excp.pf.ld      := pf || cmd_ld && !(perm_a &&          (perm_r || priv.mxr && perm_x))
+      tlb_res.bits.excp.pf.st      := pf || cmd_st && !(perm_a && perm_d && perm_w)
+      tlb_res.bits.excp.pf.instr   := pf || cmd_if && !(perm_a &&           perm_x)
+      tlb_res.bits.excp.af.ld      := false.B
+      tlb_res.bits.excp.af.st      := false.B
+      tlb_res.bits.excp.af.instr   := false.B
 
-      tlb_resp.bits.static_pm.valid := tlb_resp.valid
-      tlb_resp.bits.static_pm.bits  := vlb_resp.bits.attr(0)
-      tlb_resp.bits.ptwBack         := vlb_fill.fire
+      tlb_res.bits.static_pm.valid := tlb_res.valid
+      tlb_res.bits.static_pm.bits  := vlb_res.bits.attr(0)
+      tlb_res.bits.ptwBack         := vlb_ptw.fire
 
-      pmp_resp.ld                   := false.B
-      pmp_resp.st                   := false.B
-      pmp_resp.instr                := false.B
-      pmp_resp.mmio                 := RegNext(vlb_resp.bits.attr(0))
+      pmp_res.ld                   := false.B
+      pmp_res.st                   := false.B
+      pmp_res.instr                := false.B
+      pmp_res.mmio                 := RegNext(vlb_res.bits.attr(0))
     }
   }
 }
