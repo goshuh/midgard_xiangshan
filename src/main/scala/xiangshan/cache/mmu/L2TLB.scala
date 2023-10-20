@@ -78,7 +78,7 @@ class L2TLBImp(outer: L2TLB)(implicit p: Parameters) extends PtwModule(outer) wi
   val csr    = DelayN(io.csr.tlb, 2)
   val satp   = csr.satp
   val priv   = csr.priv
-  val flush  = sfence.valid || csr.satp.changed
+  val flush  = sfence.valid || csr.satp_changed
 
   val pmp = Module(new PMP())
   val pmp_check = VecInit(Seq.fill(2)(Module(new PMPChecker(lgMaxSize = 3, sameCycle = true)).io))

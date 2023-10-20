@@ -5,6 +5,8 @@ import  chisel3.util._
 import  midgard._
 import  midgard.util._
 
+import  huancun._
+
 import  chipsalliance.rocketchip.config._
 
 import  freechips.rocketchip.config._
@@ -38,7 +40,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
 
           c.v1copy(
             supportsProbe = TransferSizes.none,
-            sourceId      = IdRange(0, if (Q.bsSkip) llc_end_idx else Q.mrqWays))
+            sourceId      = IdRange(0, Q.mrqWays))
         })
     },
     managerFn = { mp =>
@@ -54,7 +56,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
             mayDenyGet       = true,
             mayDenyPut       = true)
         },
-        endSinkId  = if (Q.bsSkip) llc_end_idx else Q.mrqWays,
+        endSinkId  = Q.mrqWays,
         beatBytes  = 64,
         minLatency = 0)
     })
@@ -79,7 +81,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val M = ie.client.clients.head.sourceId.end
 
     val P = Q.copy(llcIdx  = N,
-                   mrqWays = if (Q.bsSkip) 1 << N else Q.mrqWays)
+                   mrqWays = Q.mrqWays)
 
     val u_mmu = Module(new backside.MMU(P))
 
@@ -98,15 +100,16 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val ctl_res   = c.d.fire
 
     val ctl_sel   = Dec(c.a.bits.address(6, 3))
-    val ctl_rnw   = c.a.bits.opcode === TLMessages.Get
+    val ctl_wnr   = c.a.bits.opcode === TLMessages.PutFullData ||
+                    c.a.bits.opcode === TLMessages.PutPartialData
 
-    val ctl_rnw_q = RegEnable(ctl_rnw,         ctl_req)
+    val ctl_wnr_q = RegEnable(ctl_wnr,         ctl_req)
     val ctl_src_q = RegEnable(c.a.bits.source, ctl_req)
 
     // body
-    val ctl_q     = dontTouch(Wire(Vec(8, UInt(64.W))))
+    val ctl_q     = Pin(Vec(8, UInt(64.W)))
 
-    val ctl_wen   = ctl_req && !ctl_rnw
+    val ctl_wen   = ctl_req && ctl_wnr
     val ctl_wdata = c.a.bits.data
     val ctl_rdata = OrM(ctl_sel, ctl_q)
 
@@ -126,27 +129,27 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val inv_wen = ctl_wen && ctl_sel(7)
 
     val ctl_reg_q   = RegEnable(ctl_req && !inv_wen,
-                                 false.B,
-                                 ctl_req ||  ctl_res)
+                                false.B,
+                                ctl_req ||  ctl_res)
 
-    val ctl_reg_res = ctl_rnw_q ??
+    val ctl_reg_res = ctl_wnr_q ??
+                          ce.AccessAck(ctl_src_q,
+                                       3.U) ::
                           ce.AccessAck(ctl_src_q,
                                        3.U,
-                                       RegEnable(ctl_rdata, ctl_req)) ::
-                          ce.AccessAck(ctl_src_q,
-                                       3.U)
+                                       RegEnable(ctl_rdata, ctl_req))
 
     u_mmu.ctl_i := ctl_q
     u_mmu.rst_i := RegNext(ctl_wen && Any(ctl_sel(6.W)))
 
     // inv
-    val inv_fsm_en  = dontTouch(Wire(Bool()))
-    val inv_fsm_nxt = dontTouch(Wire(UInt(2.W)))
-    val inv_fsm_q   = dontTouch(Wire(UInt(2.W)))
-    val inv_mcn_q   = dontTouch(Wire(UInt(P.mcnBits.W)))
+    val inv_fsm_en  = Pin(Bool())
+    val inv_fsm_nxt = Pin(UInt(2.W))
+    val inv_fsm_q   = Pin(UInt(2.W))
+    val inv_mcn_q   = Pin(UInt(P.mcnBits.W))
 
-    val chb_inv_gnt = dontTouch(Wire(Bool()))
-    val chc_inv     = dontTouch(Wire(Bool()))
+    val chb_inv_gnt = Pin(Bool())
+    val chc_inv     = Pin(Bool())
 
     // default
     inv_fsm_en  := false.B
@@ -193,47 +196,23 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     //
     // mem
 
-    val mem_req_qual = dontTouch(Wire(Bool()))
-
-    if (P.bsSkip) {
-      val mem_scb_q  = dontTouch(Wire(Vec(M, Bool())))
-
-      val mem_dec_req = Dec(o.a.bits.source)
-      val mem_dec_res = Dec(o.d.bits.source)
-
-      for (i <- 0 until M) {
-        val set = o.a.fire && mem_dec_req(i)
-        val clr = o.d.fire && mem_dec_res(i)
-
-        mem_scb_q(i) := RegEnable(set && !clr,
-                                  false.B,
-                                  set ||  clr)
-      }
-
-      mem_req_qual := Non(mem_scb_q.U & mem_dec_req)
-
-    } else {
-      mem_req_qual := false.B
-    }
-
-    o.a.valid   := mem_req.valid && mem_req_qual
-    o.a.bits    := mem_req.bits.rnw ??
-                       oe.Get(mem_req.bits.idx,
-                              mem_req.bits.pcn ## 0.U(P.clWid.W),
-                              mem_req.bits.siz)._2 ::
+    o.a.valid   := mem_req.valid
+    o.a.bits    := mem_req.bits.wnr ??
                        oe.Put(mem_req.bits.idx,
                               mem_req.bits.pcn ## 0.U(P.clWid.W),
-                              mem_req.bits.siz,
-                              mem_req.bits.data)._2
+                              P.clWid.U,
+                              mem_req.bits.data)._2 ::
+                       oe.Get(mem_req.bits.idx,
+                              mem_req.bits.pcn ## 0.U(P.clWid.W),
+                              P.clWid.U)._2
 
-    mem_req.ready := o.a.ready  && mem_req_qual
+    mem_req.ready := o.a.ready
 
     mem_res.valid := o.d.valid
     mem_res.bits  := backside.MemRes(P,
                                      o.d.bits.source,
                                      o.d.bits.corrupt || o.d.bits.denied,
-                                     o.d.bits.opcode === TLMessages.AccessAckData,
-                                     o.d.bits.size,
+                                     o.d.bits.opcode === TLMessages.AccessAck,
                                      o.d.bits.data)
 
     o.d.ready   := mem_res.ready
@@ -251,7 +230,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val chc_dev_req_raw = i.c.bits.opcode === TLMessages.ReleaseData
 
     // encoding doesn't work
-    val chc_sel_inv = dontTouch(Wire(Bool()))
+    val chc_sel_inv = Pin(Bool())
 
     val cha_acq_req = i.a.valid && cha_acq_req_raw
     val cha_pfd_req = i.a.valid && cha_pfd_req_raw
@@ -262,25 +241,25 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     val chc_wrb_req = i.c.valid && chc_hit_req_raw &&  chc_sel_inv
     val chc_cev_req = i.c.valid && chc_cev_req_raw
     val chc_dev_req = i.c.valid && chc_dev_req_raw
-    val chd_acq_req = dontTouch(Wire(Bool()))
+    val chd_acq_req = Pin(Bool())
 
     val chc_prb = i.c.fire && (chc_mis_req_raw || chc_hit_req_raw)
 
     // no other possibilities
-    assert(i.a.valid -> (cha_acq_req_raw ||
-                         cha_pfd_req_raw ||
-                         cha_ppd_req_raw))
-    assert(i.c.valid -> (chc_mis_req_raw ||
-                         chc_hit_req_raw ||
-                         chc_cev_req_raw ||
-                         chc_dev_req_raw))
+    Chk(i.a.valid -> (cha_acq_req_raw ||
+                      cha_pfd_req_raw ||
+                      cha_ppd_req_raw))
+    Chk(i.c.valid -> (chc_mis_req_raw ||
+                      chc_hit_req_raw ||
+                      chc_cev_req_raw ||
+                      chc_dev_req_raw))
 
-    val cha_acq_gnt = dontTouch(Wire(Bool()))
-    val chb_prb_gnt = dontTouch(Wire(Bool()))
-    val chc_wrb_gnt = dontTouch(Wire(Bool()))
-    val chc_cev_gnt = dontTouch(Wire(Bool()))
-    val chc_dev_gnt = dontTouch(Wire(Bool()))
-    val chd_acq_gnt = dontTouch(Wire(Bool()))
+    val cha_acq_gnt = Pin(Bool())
+    val chb_prb_gnt = Pin(Bool())
+    val chc_wrb_gnt = Pin(Bool())
+    val chc_cev_gnt = Pin(Bool())
+    val chc_dev_gnt = Pin(Bool())
+    val chd_acq_gnt = Pin(Bool())
 
     // a channel
     i.a.ready   := cha_acq_gnt
@@ -318,11 +297,11 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     chc_cev_gnt := i.d.ready
 
     // priority: cev/dev > acq
-    val llc_res_sel_chd = dontTouch(Wire(Bool()))
-    val llc_res_sel_pxd = dontTouch(Wire(Bool()))
+    val llc_res_sel_chd = Pin(Bool())
+    val llc_res_sel_pxd = Pin(Bool())
 
-    val chd_sel_dev = chd_acq_req && !llc_res.bits.rnw && !llc_res_sel_pxd
-    val chd_sel_pxd = chd_acq_req && !llc_res.bits.rnw &&  llc_res_sel_pxd
+    val chd_sel_dev = chd_acq_req && llc_res.bits.wnr && !llc_res_sel_pxd
+    val chd_sel_pxd = chd_acq_req && llc_res.bits.wnr &&  llc_res_sel_pxd
 
     chd_acq_req := llc_res.valid &&  llc_res_sel_chd
     chd_acq_gnt := chc_cev_gnt   && !chc_cev_req
@@ -334,15 +313,15 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                      false.B) ::
                    chd_sel_dev ??
                        ie.ReleaseAck(llc_res.bits.idx,
-                                     llc_res.bits.siz,
+                                     P.clWid.U,
                                      llc_res.bits.err) ::
                    chd_sel_pxd ??
                        ie.AccessAck (llc_res.bits.idx,
-                                     llc_res.bits.siz,
+                                     P.clWid.U,
                                      llc_res.bits.err) ::
                        ie.Grant(llc_res.bits.idx,
                                 llc_res.bits.idx,
-                                llc_res.bits.siz,
+                                P.clWid.U,
                                 TLPermissions.toT,
                                 llc_res.bits.data,
                                 llc_res.bits.err,
@@ -372,16 +351,15 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
     llc_req.bits  := llc_sel_chc ??
                          backside.MemReq(P,
                                          i.c.bits.source,
-                                         false.B,
-                                         i.c.bits.size,
+                                         true.B,
                                          i.c.bits.address(P.maBits := P.clWid),
                                          0.U,
                                          i.c.bits.data,
                                          P.llcIdx) ::
                          backside.MemReq(P,
                                          i.a.bits.source,
-                                         cha_acq_req_raw,
-                                         i.a.bits.size,
+                                         cha_pfd_req_raw ||
+                                         cha_ppd_req_raw,
                                          i.a.bits.address(P.maBits := P.clWid),
                                          0.U,
                                          i.a.bits.data,

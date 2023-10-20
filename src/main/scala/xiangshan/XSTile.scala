@@ -14,6 +14,8 @@ import system.HasSoCParameter
 import top.BusPerfMonitor
 import utils.{DelayN, ResetGen, TLClientsMerger, TLEdgeBuffer}
 
+import midgard._
+
 class L1BusErrorUnitInfo(implicit val p: Parameters) extends Bundle with HasSoCParameter {
   val ecc_error = Valid(UInt(soc.PAddrBits.W)) 
 }
@@ -138,6 +140,7 @@ class XSTile()(implicit p: Parameters) extends LazyModule
       val hartId = Input(UInt(64.W))
       val reset_vector = Input(UInt(PAddrBits.W))
       val cpu_halt = Output(Bool())
+      val vtd = Input(new frontside.VTDReq(mgFSParam))
     })
 
     dontTouch(io.hartId)
@@ -153,6 +156,8 @@ class XSTile()(implicit p: Parameters) extends LazyModule
     else {
       core.module.io.perfEvents <> DontCare
     }
+
+    core.module.io.vtd <> io.vtd
 
     misc.module.beu_errors.icache <> core.module.io.beu_errors.icache
     misc.module.beu_errors.dcache <> core.module.io.beu_errors.dcache

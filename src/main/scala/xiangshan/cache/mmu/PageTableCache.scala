@@ -102,7 +102,7 @@ class PtwCache()(implicit p: Parameters) extends XSModule with HasPtwConst with 
   val sfence = io.sfence
   val refill = io.refill.bits
   val refill_prefetch = from_pre(io.refill.bits.req_info.source)
-  val flush = sfence.valid || io.csr.satp.changed
+  val flush = sfence.valid || io.csr.satp_changed
 
   // when refill, refuce to accept new req
   val rwHarzad = if (sramSinglePort) io.refill.valid else false.B

@@ -279,6 +279,8 @@ trait HasXSParameter {
   val coreParams = p(XSCoreParamsKey)
   val env = p(DebugOptionsKey)
 
+  val mgFSParam = p(MidgardKey)
+
   val XLEN = coreParams.XLEN
   val minFLen = 32
   val fLen = 64

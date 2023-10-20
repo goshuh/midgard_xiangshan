@@ -35,7 +35,6 @@ import huancun.debug.TLLogger
 import freechips.rocketchip.diplomacy.{Resource, ResourceBinding, ResourceInt, Binding}
 
 case object SoCParamsKey extends Field[SoCParameters]
-case object MidgardKey   extends Field[midgard.Param]
 
 object SoCResourceAnchors {
   val chosen = new Device {
@@ -85,6 +84,8 @@ trait HasSoCParameter {
   val soc = p(SoCParamsKey)
   val debugOpts = p(DebugOptionsKey)
   val tiles = p(XSTileKey)
+
+  val mgBSParam = p(MidgardKey)
 
   val NumCores = tiles.size
   val EnableILA = soc.EnableILA
@@ -154,7 +155,7 @@ trait HaveSlaveAXI4Port {
 trait HaveAXI4MemPort {
   this: BaseSoC =>
   val device = new MemoryDevice
-  val memRange = AddressSet(0x00000000L, (1L << p(MidgardKey).paBits) - 1L).subtract(AddressSet(0x0L, 0x7fffffffL))
+  val memRange = AddressSet(0x00000000L, (1L << mgBSParam.paBits) - 1L).subtract(AddressSet(0x0L, 0x7fffffffL))
   val memAXI4SlaveNode = AXI4SlaveNode(Seq(
     AXI4SlavePortParameters(
       slaves = Seq(
@@ -174,7 +175,7 @@ trait HaveAXI4MemPort {
 
   val mem_xbar = TLXbar()
 
-  val mmu = if (p(MidgardKey).en) Some(LazyModule(new BSMMUWrapper())) else None
+  val mmu = if (mgBSParam.en) Some(LazyModule(new BSMMUWrapper())) else None
 
   val mem_nodes =
     Seq(mem_xbar, TLBuffer()) ++

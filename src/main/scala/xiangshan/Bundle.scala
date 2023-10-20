@@ -43,6 +43,9 @@ import xiangshan.frontend.Ftq_Redirect_SRAMEntry
 import xiangshan.frontend.AllFoldedHistories
 import xiangshan.frontend.AllAheadFoldedHistoryOldestBits
 
+import huancun._
+import midgard._
+
 class ValidUndirectioned[T <: Data](gen: T) extends Bundle {
   val valid = Bool()
   val bits = gen.cloneType.asInstanceOf[T]
@@ -416,20 +419,71 @@ class SatpStruct(implicit p: Parameters) extends XSBundle {
 }
 
 class TlbSatpBundle(implicit p: Parameters) extends SatpStruct {
-  val changed = Bool()
-
   def apply(satp_value: UInt): Unit = {
     require(satp_value.getWidth == XLEN)
     val sa = satp_value.asTypeOf(new SatpStruct)
     mode := sa.mode
     asid := sa.asid
     ppn := Cat(0.U(56-PAddrBits), sa.ppn(PAddrBits-13, 0)).asUInt()
-    changed := DataChanged(sa.asid) // when ppn is changed, software need do the flush
+  }
+}
+
+class UatpStruct(implicit p: Parameters) extends XSBundle {
+  val en    = Bool()
+  val base  = UInt(63.W)
+}
+
+class TlbUatpBundle(implicit p: Parameters) extends UatpStruct {
+  def apply(uatp: UInt): Unit = {
+    en    := uatp(63)
+    base  := uatp(62,  0)
+  }
+}
+
+class TlbUatcBundle(implicit p: Parameters) extends frontside.VSCCfg {
+  def mask(v: UInt): UInt = {
+    Or.rightOR(UIntToOH(v)) >> 1
+  }
+
+  def apply(uatc: UInt, new_uatc: UInt, wr: Bool): Unit = {
+    idx   := uatc( 5,  0)
+    vsc   := uatc(13,  8)
+    top   := uatc(21, 16)
+    siz   := uatc(29, 24)
+
+    val new_idx = new_uatc( 5,  0)
+    val new_vsc = new_uatc(13,  8)
+    val new_top = new_uatc(21, 16)
+    val new_siz = new_uatc(29, 24)
+
+    // just let the synthesizer do the optimization
+    tsl   := RegEnable( new_vsc - new_idx + 1.U,  wr)
+    mmask := RegEnable( mask(new_idx),            wr)
+    imask := RegEnable( mask(new_vsc) >> new_idx, wr)
+    vmask := RegEnable( mask(new_top) >> new_vsc, wr)
+    tmask := RegEnable(~mask(new_siz),            wr)
+  }
+}
+
+class TlbSdidBundle(implicit p: Parameters) extends XSBundle {
+  val sdid = UInt(mgFSParam.sdidBits.W)
+
+  def apply(value: UInt): Unit = {
+    sdid := value(mgFSParam.sdidBits - 1, 0)
   }
 }
 
 class TlbCsrBundle(implicit p: Parameters) extends XSBundle {
   val satp = new TlbSatpBundle()
+  val uatp = new TlbUatpBundle()
+  val uatc = new TlbUatcBundle()
+  val sdid = new TlbSdidBundle()
+
+  val satp_changed = Bool()
+  val uatp_changed = Bool()
+  val uatc_changed = Bool()
+  val sdid_changed = Bool()
+
   val priv = new Bundle {
     val mxr = Bool()
     val sum = Bool()
@@ -484,6 +538,11 @@ class FSBCIO(implicit p: Parameters) extends XSBundle {
   val mask  = Input (UInt(XLEN.W))
   val head  = Input (UInt(XLEN.W))
   val tail  = Output(UInt(XLEN.W))
+}
+
+class VTDIIO(implicit p: Parameters) extends XSBundle {
+  val req   = Input (new frontside.VTDReq(mgFSParam))
+  val uatp  = Input (UInt(64.W))
 }
 
 class CustomCSRCtrlIO(implicit p: Parameters) extends XSBundle {

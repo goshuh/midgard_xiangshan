@@ -76,7 +76,7 @@ class PTW()(implicit p: Parameters) extends XSModule with HasPtwConst with HasPe
   val sfence = io.sfence
   val mem = io.mem
   val satp = io.csr.satp
-  val flush = io.sfence.valid || io.csr.satp.changed
+  val flush = io.sfence.valid || io.csr.satp_changed
 
   val s_idle :: s_addr_check :: s_mem_req :: s_mem_resp :: s_check_pte :: Nil = Enum(5)
   val state = RegInit(s_idle)
@@ -351,7 +351,7 @@ class LLPTW(implicit p: Parameters) extends XSModule with HasPtwConst with HasPe
     state(enq_ptr_reg) := Mux(accessFault, state_mem_out, state_mem_req)
   }
 
-  val flush = io.sfence.valid || io.csr.satp.changed
+  val flush = io.sfence.valid || io.csr.satp_changed
   when (flush) {
     state.map(_ := state_idle)
   }

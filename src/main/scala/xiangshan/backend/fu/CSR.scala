@@ -435,6 +435,14 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val pmpMapping = pmp_gen_mapping(pmp_init, NumPMP, PmpcfgBase, PmpaddrBase, pmp)
   val pmaMapping = pmp_gen_mapping(pma_init, NumPMA, PmacfgBase, PmaaddrBase, pma)
 
+  // user translation
+  val usdid = dontTouch(RegInit(0.U(64.W)))
+
+  val suatp = dontTouch(RegInit(0.U(64.W)))
+  val suatc = dontTouch(RegInit(0.U(64.W)))
+  val suatl = dontTouch(RegInit(0.U(64.W)))
+  val suath = dontTouch(RegInit(0.U(64.W)))
+
   // Superviser-Level CSRs
 
   // val sstatus = RegInit(UInt(XLEN.W), "h00000000".U)
@@ -529,8 +537,6 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   csrio.customCtrl.svinval_enable := srnctl(1)
 
   val tlbBundle = Wire(new TlbCsrBundle)
-  tlbBundle.satp.apply(satp)
-
   csrio.tlb := tlbBundle
 
   // User-Level CSRs
@@ -683,6 +689,14 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     MaskedRegMap(Slvpredctl, slvpredctl),
     MaskedRegMap(Smblockctl, smblockctl),
     MaskedRegMap(Srnctl, srnctl),
+
+    // user translation
+    MaskedRegMap(Usdid,  usdid),
+
+    MaskedRegMap(Suatp,  suatp),
+    MaskedRegMap(Suatc,  suatc),
+    MaskedRegMap(Suatl,  suatl),
+    MaskedRegMap(Suath,  suath),
 
     MaskedRegMap(Sfsbbase, sfsbbase),
     MaskedRegMap(Sfsbmask, sfsbmask),
@@ -882,7 +896,21 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   // Branch control
   val retTarget = Wire(UInt(VAddrBits.W))
   val resetSatp = addr === Satp.U && wen // write to satp will cause the pipeline be flushed
-  flushPipe := resetSatp || (valid && func === CSROpType.jmp && !isEcall && !isEbreak)
+  val resetSuatp = addr === Suatp.U && wen
+  val resetSuatc = addr === Suatc.U && wen
+  val resetUsdid = addr === Usdid.U && wen
+  flushPipe := resetSatp || resetSuatp || resetSuatc || resetUsdid || (valid && func === CSROpType.jmp && !isEcall && !isEbreak)
+
+  tlbBundle.satp.apply(satp)
+  tlbBundle.uatp.apply(suatp)
+  tlbBundle.uatc.apply(suatc, wdata, resetSuatc)
+  tlbBundle.sdid.apply(usdid)
+
+  tlbBundle.satp_changed := RegNext(resetSatp,  false.B)
+  tlbBundle.uatp_changed := RegNext(resetSuatp, false.B)
+  tlbBundle.uatc_changed := RegNext(resetSuatc, false.B)
+  tlbBundle.sdid_changed := RegNext(resetUsdid, false.B)
+
 
   retTarget := DontCare
   // val illegalEret = TODO

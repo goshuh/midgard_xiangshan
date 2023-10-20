@@ -34,6 +34,9 @@ import system._
 
 import scala.collection.mutable.ListBuffer
 
+import huancun._
+import midgard._
+
 abstract class XSModule(implicit val p: Parameters) extends MultiIOModule
   with HasXSParameter
   with HasFPUParameters {
@@ -140,13 +143,13 @@ abstract class XSCoreBase()(implicit p: config.Parameters) extends LazyModule
   // outer facing nodes
   val frontend = LazyModule(new Frontend())
   val ptw = LazyModule(new L2TLBWrapper())
-  val ptw_mg = LazyModule(new FSPTWWrapper(2, p(MidgardKey)))
+  val ttw = LazyModule(new FSTTWWrapper(mgFSParam))
   val ptw_xbar = LazyModule(new TLXbar())
   val ptw_to_l2_buffer = LazyModule(new TLBuffer)
   val csrOut = BundleBridgeSource(Some(() => new DistributedCSRIO()))
 
   ptw_xbar.node := ptw.node
-  ptw_xbar.node := TLWidthWidget(64) := ptw_mg.node
+  ptw_xbar.node := TLWidthWidget(64) := ttw.node
 
   ptw_to_l2_buffer.node := ptw_xbar.node
 
@@ -252,6 +255,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
     val l2_pf_enable = Output(Bool())
     val perfEvents = Input(Vec(numPCntHc * coreParams.L2NBanks, new PerfEvent))
     val beu_errors = Output(new XSL1BusErrors())
+    val vtd = Input(new frontside.VTDReq(mgFSParam))
   })
 
   println(s"FPGAPlatform:${env.FPGAPlatform} EnableDebug:${env.EnableDebug}")
@@ -261,7 +265,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   val wb2Ctrl = outer.wb2Ctrl.module
   val memBlock = outer.memBlock.module
   val ptw = outer.ptw.module
-  val ptw_mg = outer.ptw_mg.module
+  val ttw = outer.ttw.module
   val ptw_xbar = outer.ptw_xbar.module
   val ptw_to_l2_buffer = outer.ptw_to_l2_buffer.module
   val exuBlocks = outer.exuBlocks.map(_.module)
@@ -427,10 +431,16 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   ptw.io.csr.distribute_csr <> csrioIn.customCtrl.distribute_csr
 
   // midgard
-  ptw_mg.satp_i   := csrioIn.tlb.satp.ppn ## 0.U(6.W)
+  ttw.satp_i   := csrioIn.tlb.satp.asUInt
+  ttw.uatp_i   := csrioIn.tlb.uatp.asUInt
+  ttw.uatc_i   := csrioIn.tlb.uatc
+  ttw.asid_i   := csrioIn.tlb.satp.asid
+  ttw.sdid_i   := csrioIn.tlb.sdid.sdid
 
-  ptw_mg.vlb_i(0) <> frontend.io.ptw_mg
-  ptw_mg.vlb_i(1) <> memBlock.io.ptw_mg
+  ttw.vlb_i(0) <> frontend.io.ttw
+  ttw.vlb_i(1) <> memBlock.io.ttw
+
+  ttw.vtd_i    <> io.vtd
 
   // if l2 prefetcher use stream prefetch, it should be placed in XSCore
   io.l2_pf_enable := csrioIn.customCtrl.l2_pf_enable
@@ -443,7 +453,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
         ModuleNode(itlbRepeater2),
         ModuleNode(ptw),
         ModuleNode(dtlbRepeater2),
-        ModuleNode(ptw_mg),
+        ModuleNode(ttw),
         ModuleNode(ptw_xbar),
         ModuleNode(ptw_to_l2_buffer),
       )),

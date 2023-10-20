@@ -59,7 +59,7 @@ class TLB(Width: Int, Block: Seq[Boolean], q: TLBParameters)(implicit p: Paramet
   val sfence = DelayN(io.sfence, q.fenceDelay)
   val csr = io.csr
   val satp = DelayN(io.csr.satp, q.fenceDelay)
-  val flush_mmu = DelayN(sfence.valid || csr.satp.changed, q.fenceDelay)
+  val flush_mmu = DelayN(sfence.valid || csr.satp_changed, q.fenceDelay)
   val mmu_flush_pipe = DelayN(sfence.valid && sfence.bits.flushPipe, q.fenceDelay) // for svinval, won't flush pipe
   val flush_pipe = io.flushPipe
 
@@ -74,6 +74,7 @@ class TLB(Width: Int, Block: Seq[Boolean], q: TLBParameters)(implicit p: Paramet
   val req_in = req
   val req_out = req.map(a => RegEnable(a.bits, a.fire()))
   val req_out_v = (0 until Width).map(i => ValidHold(req_in(i).fire && !req_in(i).bits.kill, resp(i).fire, flush_pipe(i)))
+  val req_out_v_nokill = (0 until Width).map(i => ValidHold(req_in(i).fire, resp(i).fire, flush_pipe(i)))
 
   val refill = ptw.resp.fire() && !flush_mmu && vmEnable
   val entries = Module(new TlbStorageWrapper(Width, q))
@@ -144,7 +145,7 @@ class TLB(Width: Int, Block: Seq[Boolean], q: TLBParameters)(implicit p: Paramet
   }
 
   def pmp_check(addr: UInt, size: UInt, cmd: UInt, idx: Int): Unit = {
-    pmp(idx).valid := resp(idx).valid
+    pmp(idx).valid := (if (Block(idx)) resp(idx).valid else req_out_v_nokill(idx))
     pmp(idx).bits.addr := addr
     pmp(idx).bits.size := size
     pmp(idx).bits.cmd := cmd

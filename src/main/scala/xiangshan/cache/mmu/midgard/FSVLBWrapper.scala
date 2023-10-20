@@ -8,35 +8,38 @@ import  midgard.util._
 import  xiangshan._
 import  xiangshan.backend.fu._
 import  xiangshan.backend.fu.util._
+import  huancun._
 
 import  chipsalliance.rocketchip.config._
 
 
-class FSPTWIO(P: Param) extends Bundle {
-  val ptw_req_o =         Decoupled(new frontside.VLBReq(P))
-  val ptw_res_i = Flipped(    Valid(new frontside.VMA(P)))
+class FSTWIO(P: Param)(implicit p: Parameters) extends Bundle {
+  val ttw_req_o =         Valid(new frontside.VLBReq(P))
+  val ttw_res_i = Flipped(Valid(new frontside.VMA   (P)))
+  val ttw_ext_i =         Input(new frontside.TTWExt(P))
+
+  val vtd_req_i =         Input(new frontside.VTDReq(P))
 }
 
 
-class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Parameters) extends Module
+class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) extends Module
   with HasXSParameter
   with HasCSRConst {
 
   // --------------------------
   // io
 
-  val sfence_i  = IO(                   Input(new SfenceBundle))
-  val csr_i     = IO(                   Input(new TlbCsrBundle))
-  val flush_i   = IO(                   Input(Bool()))
+  val csr_i     = IO(               Input(new TlbCsrBundle))
+  val sfence_i  = IO(               Input(new SfenceBundle))
+  val flush_i   = IO(               Input(Bool()))
 
-  val tlb_i     = IO(Vec(N, Flipped(          new TlbRequestIO)))
-  val tlb_o     = IO(Vec(N,                   new TlbRequestIO))
+  val tlb_i     = IO(Vec(N, Flipped(      new TlbRequestIO)))
+  val tlb_o     = IO(Vec(N,               new TlbRequestIO))
 
-  val pmp_i     = IO(Vec(N, Flipped(          new PMPRespBundle)))
-  val pmp_o     = IO(Vec(N,                   new PMPRespBundle))
+  val pmp_i     = IO(Vec(N, Flipped(      new PMPRespBundle)))
+  val pmp_o     = IO(Vec(N,               new PMPRespBundle))
 
-  val ptw_req_o = IO(               Decoupled(new frontside.VLBReq(P)))
-  val ptw_res_i = IO(       Flipped(    Valid(new frontside.VMA(P))))
+  val ttw_o     = IO(                     new FSTWIO(P))
 
 
   // --------------------------
@@ -47,155 +50,178 @@ class FSVLBWrapper(N: Int, B: Boolean, F: Int, P: Param)(implicit val p: Paramet
   val sfence_one = sfence &&  sfence_i.bits.rs2
 
   val priv       = csr_i.priv
-  val satp       = csr_i.satp
-  val mode       = P.tlbEn.B ?? priv.imode :: priv.dmode
 
-  // expand flush
-  val flush      = Any(Exp(flush_i, F))
-  val flush_q    = RegNext(flush_i)
+  val mode       = B.B ?? priv.imode :: priv.dmode
+  val mode_u     = mode === ModeU
+  val mode_s     = mode === ModeS
 
   //
   // inst
 
-  // now everyone takes two cycles for the tlb
-  require(!P.tlbEn)
-
   val u_vlb = Module(new frontside.VLB(P, N))
 
-  u_vlb.asid_i      := satp.asid
+  u_vlb.uatc_i      := csr_i.uatc
+  u_vlb.asid_i      := csr_i.satp.asid
+  u_vlb.sdid_i      := csr_i.sdid.sdid
 
   u_vlb.kill_i      := sfence_all ##
                        sfence_one ##
-                      (sfence || satp.changed || flush)
-  u_vlb.kill_asid_i := sfence_i.bits.asid
+                      (sfence ||
+                       csr_i.satp_changed ||
+                       csr_i.uatp_changed ||
+                       csr_i.uatc_changed ||
+                       csr_i.sdid_changed ||
+                       flush_i)
 
-  ptw_req_o         <> u_vlb.ptw_req_o
-  ptw_res_i         <> u_vlb.ptw_res_i
+  u_vlb.kill_asid_i := sfence_i.bits.asid
+  u_vlb.kill_sdid_i := csr_i.sdid.sdid
+
+  u_vlb.vtd_req_i   := ttw_o.vtd_req_i
+  u_vlb.ttw_ext_i   := ttw_o.ttw_ext_i
+
+  ttw_o.ttw_req_o   <> u_vlb.ttw_req_o
+  ttw_o.ttw_res_i   <> u_vlb.ttw_res_i
 
 
   //
-  // switch
+  // connect
 
-  val sel_mg    = (satp.mode === 0xf.U) && (mode =/= ModeM) && P.en.B
-  val sel_mg_q  =  RegNext(sel_mg)
-
-  // mode can toggle
-  val sel_to_xs = !sel_mg &&  sel_mg_q
-  val sel_to_mg =  sel_mg && !sel_mg_q
-
-  // default connection
   for (i <- 0 until N) {
-    tlb_o(i) <> tlb_i(i)
-    pmp_o(i) <> pmp_i(i)
-  }
+    val tlb_req      = tlb_o(i).req
+    val tlb_res      = tlb_o(i).resp
+    val tlb_kill     = tlb_o(i).req_kill
 
-  // midgard connection
-  for (i <- 0 until N) {
-    val vlb_req  = u_vlb.vlb_req_i(i)
-    val vlb_res  = u_vlb.vlb_res_o(i)
-    val vlb_ptw  = u_vlb.vlb_ptw_o
+    val vlb_req      = u_vlb.vlb_req_i(i)
+    val vlb_res      = u_vlb.vlb_res_o(i)
+    val vlb_ttw      = u_vlb.vlb_ttw_o
 
-    val tlb_req  = tlb_i(i).req
-    val tlb_res  = tlb_i(i).resp
-    val tlb_kill = tlb_i(i).req_kill || flush_q || sel_to_xs
+    val src_req      = tlb_i(i).req
+    val src_res      = tlb_i(i).resp
+    val src_kill     = tlb_i(i).req_kill || src_req.bits.kill
+    val src_pmp      = pmp_i(i)
 
-    val tlb_vpn  = tlb_req.bits.vaddr(VAddrBits := 12)
-    val tlb_offs = tlb_req.bits.vaddr(12.W)
+    val src_req_fire = src_req.fire
+    val src_req_cmd  = src_req.bits.cmd
+    val src_req_vpn  = src_req.bits.vaddr(VAddrBits := 12)
 
-    val pmp_res  = pmp_o(i)
+    val src_res_fire = src_res.fire
 
-    val req_vld  = dontTouch(Wire(Bool()))
-    val req_vpn  = dontTouch(Wire(UInt((VAddrBits - 12).W)))
-    val req_cmd  = dontTouch(Wire(UInt(3.W)))
-    val req_kill = dontTouch(Wire(UInt(2.W)))
+    val dst_pmp      = pmp_o(i)
 
-    vlb_req.valid := req_vld
-    vlb_req.bits  := frontside.VLBReq(P,
-                                      0.U,
-                                      req_vpn,
-                                      req_kill)
+    // stage 0
+
+    val s0_sel       = mode_u && csr_i.uatp.en && (src_req_vpn(24 :+ 2) === 1.U)
+    val s1_sel_q     = RegEnable(s0_sel,   false.B, src_req_fire)
+    val s2_sel_q     = RegEnable(s1_sel_q, false.B, src_res_fire)
+
+    val s1_req_pld_q = RegEnable(src_req.bits, src_req_fire)
+    val s1_req_cmd   = s1_req_pld_q.cmd
+    val s1_req_vpn   = s1_req_pld_q.vaddr(VAddrBits := 12)
+    val s1_req_offs  = s1_req_pld_q.vaddr(12.W)
+
+    val s1_res_fake  = Pin(Bool())
+
+    // see: handle_block
+    tlb_req.valid      := src_req.valid && !s0_sel
+    tlb_req.bits.vaddr := src_req.bits.vaddr
+    tlb_req.bits.cmd   := src_req.bits.cmd
+    tlb_req.bits.size  := src_req.bits.size
+    tlb_req.bits.debug := src_req.bits.debug
+    tlb_req.bits.kill  := src_kill
+    tlb_kill           := src_kill
+
+    val flush_q = RegNext(flush_i || src_kill, false.B)
+
+    vlb_req.bits.idx   := 0.U
+    vlb_req.bits.kill  := flush_q ## src_kill
 
     if (B) {
-      val vld_old = dontTouch(Wire(Bool()))
-      val vld_new = dontTouch(Wire(Bool()))
+      // see: req_out_v
+      val s1_vld_q = RegEnable(src_req_fire && !src_kill && !flush_i,
+                               false.B,
+                               src_req_fire ||
+                               src_res_fire ||
+                               flush_i)
 
-      val vld_raw = sel_mg && (vld_old || vld_new)
-      val vld     = sel_mg && (vld_old || vld_new && !tlb_req.bits.kill) && !flush_q
-      val vld_q   = sel_mg &&  RegNext(vld)
+      val s1_vld   = s1_vld_q && !src_res_fire
 
-      assert(tlb_req.valid -> !flush_q)
+      // see: handle_block
+      vlb_req.valid    := s1_vld && s1_sel_q   || src_req.valid && s0_sel
+      vlb_req.bits.vpn := s1_vld ?? s1_req_vpn :: src_req_vpn
 
-      // upstream issues random reqs. always stick to the oldest one
-      vld_new  := tlb_req.fire
-      vld_old  := vld_q && !tlb_res.fire
+      src_req.ready    := s1_vld_q &&
+                             (vlb_res.valid &&  s1_sel_q  ||
+                              tlb_res.valid && !s1_sel_q) ||
+                         !s1_vld_q
 
-      req_vld  := vld_raw
-      req_vpn  := vld_old  ??  RegEnable(tlb_vpn,          vld_new) :: tlb_vpn
-      req_cmd  := vld_old  ??  RegEnable(tlb_req.bits.cmd, vld_new) :: tlb_req.bits.cmd
-      req_kill := tlb_kill ## (flush ||  vld_new && tlb_req.bits.kill)
+      tlb_res.ready    := src_res.ready && !s1_sel_q
+      vlb_res.ready    := src_res.ready &&  s1_sel_q
 
-      when (sel_mg) {
-        tlb_req.ready := tlb_res.fire || !vld_q
-
-        // also fake a response for flush
-        tlb_res.valid          := vlb_res.valid && vlb_res.bits.vld || vld_q && flush_q
-        tlb_res.bits.paddr     := vlb_res.bits.mpn ## RegEnable(tlb_offs, vld_new)
-        tlb_res.bits.miss      := false.B
-        tlb_res.bits.fast_miss := false.B
-      }
+      // icache doesn't care about flush_pipe
+      s1_res_fake      := s1_vld_q && s1_sel_q && flush_i
 
     } else {
-      req_vld  := sel_mg && tlb_req.valid
-      req_vpn  := tlb_vpn
-      req_cmd  := RegNext(tlb_req.bits.cmd)
-      req_kill := tlb_kill ## (flush || tlb_req.bits.kill)
+      // see: handle_nonblock
+      vlb_req.valid    := src_req.valid &&  s0_sel
+      vlb_req.bits.vpn := src_req_vpn
 
-      when (sel_mg) {
-        tlb_req.ready := true.B
+      src_req.ready    := src_res.ready &&
+                             (vlb_req.ready &&  s0_sel ||
+                              tlb_req.ready && !s0_sel)
 
-        tlb_res.valid          :=     vlb_res.valid
-        tlb_res.bits.paddr     :=     vlb_res.bits.mpn ## RegNext(tlb_offs)
-        tlb_res.bits.miss      := Non(vlb_res.bits.vld)
-        tlb_res.bits.fast_miss := Non(vlb_res.bits.vld)
-      }
+      tlb_res.ready    := src_res.ready && !s0_sel
+      vlb_res.ready    := src_res.ready &&  s0_sel
+
+      s1_res_fake      := false.B
     }
 
-    when (sel_mg) {
-      // break the default connection
-      tlb_o(i).req .valid := false.B
-      tlb_o(i).resp.ready :=  true.B
+    // stage 1
 
-      val cmd_ld = TlbCmd.isRead (req_cmd) && !TlbCmd.isAmo(req_cmd)
-      val cmd_st = TlbCmd.isWrite(req_cmd) ||  TlbCmd.isAmo(req_cmd)
-      val cmd_if = TlbCmd.isExec (req_cmd)
+    val s1_ld      = TlbCmd.isRead (s1_req_cmd) && !TlbCmd.isAmo(s1_req_cmd)
+    val s1_st      = TlbCmd.isWrite(s1_req_cmd) ||  TlbCmd.isAmo(s1_req_cmd)
+    val s1_if      = TlbCmd.isExec (s1_req_cmd)
 
-      val perm_r = vlb_res.bits.attr(1)
-      val perm_w = vlb_res.bits.attr(2)
-      val perm_x = vlb_res.bits.attr(3)
-      val perm_u = vlb_res.bits.attr(4)
-      val perm_g = vlb_res.bits.attr(5)
-      val perm_a = vlb_res.bits.attr(6)
-      val perm_d = vlb_res.bits.attr(7)
+    val s1_vlb_r   = vlb_res.bits.r
+    val s1_vlb_w   = vlb_res.bits.w
+    val s1_vlb_x   = vlb_res.bits.x
+    val s1_vlb_u   = vlb_res.bits.u
+    val s1_vlb_g   = vlb_res.bits.g
+    val s1_vlb_z   = vlb_res.bits.z
+    val s1_vlb_e   = vlb_res.bits.e
 
-      val pf     = vlb_res.bits.err ||
-                  (mode === ModeS) &&  perm_u && (!priv.sum || P.tlbEn.B) ||
-                  (mode === ModeU) && !perm_u
+    val s1_vlb_xpf = vlb_res.bits.err ||
+                     mode_s &&  s1_vlb_u && !priv.sum ||
+                     mode_u && !s1_vlb_u
 
-      tlb_res.bits.excp.pf.ld      := pf || cmd_ld && !(perm_a &&          (perm_r || priv.mxr && perm_x))
-      tlb_res.bits.excp.pf.st      := pf || cmd_st && !(perm_a && perm_d && perm_w)
-      tlb_res.bits.excp.pf.instr   := pf || cmd_if && !(perm_a &&           perm_x)
-      tlb_res.bits.excp.af.ld      := false.B
-      tlb_res.bits.excp.af.st      := false.B
-      tlb_res.bits.excp.af.instr   := false.B
+    val s1_vlb_lpf = s1_vlb_xpf || s1_ld && !(s1_vlb_r || priv.mxr && s1_vlb_x)
+    val s1_vlb_spf = s1_vlb_xpf || s1_st &&  !s1_vlb_w
+    val s1_vlb_ipf = s1_vlb_xpf || s1_if &&  !s1_vlb_x
 
-      tlb_res.bits.static_pm.valid := tlb_res.valid
-      tlb_res.bits.static_pm.bits  := vlb_res.bits.attr(0)
-      tlb_res.bits.ptwBack         := vlb_ptw.fire
+    val s1_vlb_vld = vlb_res.valid && !(B.B && !vlb_res.bits.vld) || s1_res_fake
+    val s1_vlb_ma  = vlb_res.bits.mpn ## s1_req_offs
+    val s1_vlb_hit = vlb_res.bits.vld ||
+                     vlb_res.bits.err
 
-      pmp_res.ld                   := false.B
-      pmp_res.st                   := false.B
-      pmp_res.instr                := false.B
-      pmp_res.mmio                 := RegNext(vlb_res.bits.attr(0))
-    }
+    src_res.valid                := s1_sel_q ??  s1_vlb_vld    :: tlb_res.valid
+    src_res.bits.paddr           := s1_sel_q ??  s1_vlb_ma     :: tlb_res.bits.paddr
+    src_res.bits.miss            := s1_sel_q ?? !s1_vlb_hit    :: tlb_res.bits.miss
+    src_res.bits.fast_miss       := s1_sel_q ?? !s1_vlb_hit    :: tlb_res.bits.fast_miss
+    src_res.bits.excp.pf.ld      := s1_sel_q ??  s1_vlb_lpf    :: tlb_res.bits.excp.pf.ld
+    src_res.bits.excp.pf.st      := s1_sel_q ??  s1_vlb_spf    :: tlb_res.bits.excp.pf.st
+    src_res.bits.excp.pf.instr   := s1_sel_q ??  s1_vlb_ipf    :: tlb_res.bits.excp.pf.instr
+    src_res.bits.excp.af.ld      := s1_sel_q ??  false.B       :: tlb_res.bits.excp.af.ld
+    src_res.bits.excp.af.st      := s1_sel_q ??  false.B       :: tlb_res.bits.excp.af.st
+    src_res.bits.excp.af.instr   := s1_sel_q ??  false.B       :: tlb_res.bits.excp.af.instr
+    src_res.bits.static_pm.valid := s1_sel_q ??  s1_vlb_vld    :: tlb_res.bits.static_pm.valid
+    src_res.bits.static_pm.bits  := s1_sel_q ??  s1_vlb_e      :: tlb_res.bits.static_pm.bits
+    src_res.bits.ptwBack         :=              vlb_ttw.valid || tlb_res.bits.ptwBack
+
+    // stage 2
+    val s2_vlb_e_q = RegEnable(s1_vlb_e, src_res_fire)
+
+    dst_pmp.ld                   := s2_sel_q ??  false.B       :: src_pmp.ld
+    dst_pmp.st                   := s2_sel_q ??  false.B       :: src_pmp.st
+    dst_pmp.instr                := s2_sel_q ??  false.B       :: src_pmp.instr
+    dst_pmp.mmio                 := s2_sel_q ??  s2_vlb_e_q    :: src_pmp.mmio
   }
 }

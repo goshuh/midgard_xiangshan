@@ -26,7 +26,7 @@ import freechips.rocketchip.diplomacy.{IdRange, LazyModule, LazyModuleImp, Trans
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.util.{BundleFieldBase, UIntToOH1}
 import device.RAMHelper
-import huancun.{AliasField, AliasKey, DirtyField, PreferCacheField, PrefetchField}
+import huancun.{AliasField, AliasKey, DirtyField, PreferCacheField, PrefetchField, VTDIKey, VTDIField}
 import huancun.utils.FastArbiter
 import mem.{AddPipelineReg}
 
@@ -55,6 +55,7 @@ case class DCacheParameters
   val setBytes = nSets * blockBytes
   val aliasBitsOpt = if(setBytes > pageSize) Some(log2Ceil(setBytes / pageSize)) else None
   val reqFields: Seq[BundleFieldBase] = Seq(
+    VTDIField(),
     PrefetchField(),
     PreferCacheField()
   ) ++ aliasBitsOpt.map(AliasField)
@@ -414,6 +415,7 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val lsu = new DCacheToLsuIO
   val csr = new L1CacheToCsrIO
   val error = new L1CacheErrorInfo
+  val tlb = Input(new TlbCsrBundle())
   val ise  = Output(Bool())
   val fsbc = new FSBCIO()
   val mshrFull = Output(Bool())
@@ -621,6 +623,14 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   missQueue.io.probe_addr := bus.b.bits.address
 
   missQueue.io.main_pipe_resp := RegNext(mainPipe.io.atomic_resp)
+
+  // user translation
+  val vtdi_mask = ~0.U((PAddrBits - 26).W) ## io.tlb.uatc.tmask
+
+  bus.a.bits.user.lift(VTDIKey).foreach(_ :=
+    bus.a.valid &&
+      ((vtdi_mask & (bus.a.bits.address >> 6)) ===
+       (vtdi_mask & (io.tlb.uatp.base   << 6))))
 
   //----------------------------------------
   // probe

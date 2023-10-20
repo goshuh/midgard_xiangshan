@@ -34,7 +34,7 @@ class L2TlbPrefetchIO(implicit p: Parameters) extends MMUIOBaseBundle with HasPt
 class L2TlbPrefetch(implicit p: Parameters) extends XSModule with HasPtwConst {
   val io = IO(new L2TlbPrefetchIO())
 
-  val flush = io.sfence.valid || io.csr.satp.changed
+  val flush = io.sfence.valid || io.csr.satp_changed
   val next_line = RegEnable(get_next_line(io.in.bits.vpn), io.in.valid)
   val v = ValidHold(io.in.valid && !flush, io.out.fire(), flush)
 

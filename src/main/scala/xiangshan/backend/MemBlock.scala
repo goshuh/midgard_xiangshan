@@ -27,7 +27,7 @@ import xiangshan.backend.exu.StdExeUnit
 import xiangshan.backend.fu._
 import xiangshan.backend.rob.RobLsqIO
 import xiangshan.cache._
-import xiangshan.cache.mmu.{VectorTlbPtwIO, TLBNonBlock, TlbReplace, FSPTWIO, FSVLBWrapper}
+import xiangshan.cache.mmu.{VectorTlbPtwIO, TLBNonBlock, TlbReplace, FSTWIO, FSVLBWrapper}
 import xiangshan.mem._
 import system._
 
@@ -80,7 +80,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
     val ptw = new VectorTlbPtwIO(exuParameters.LduCnt + exuParameters.StuCnt)
-    val ptw_mg = new FSPTWIO(p(MidgardKey))
+    val ttw = new FSTWIO(mgFSParam)
     val sfence = Input(new SfenceBundle)
     val tlbCsr = Input(new TlbCsrBundle)
     val fenceToSbuffer = Flipped(new FenceToSbuffer)
@@ -209,8 +209,10 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     }
   }
 
+  dcache.io.tlb := tlbcsr
+
   val ptw_resp_next = RegEnable(io.ptw.resp.bits, io.ptw.resp.valid)
-  val ptw_resp_v = RegNext(io.ptw.resp.valid && !(sfence.valid && tlbcsr.satp.changed), init = false.B)
+  val ptw_resp_v = RegNext(io.ptw.resp.valid && !(sfence.valid && tlbcsr.satp_changed), init = false.B)
   io.ptw.resp.ready := true.B
 
   (dtlb.map(a => a.ptw.req.map(b => b)))
@@ -248,10 +250,10 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   dtlb.map(_.ptw_replenish := pmp_check_ptw.io.resp)
 
   // midgard
-  val dvlb = Module(new FSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, false, 0, p(MidgardKey)))
+  val dvlb = Module(new FSVLBWrapper(exuParameters.LduCnt + exuParameters.StuCnt, false, mgFSParam))
 
-  dvlb.sfence_i := sfence
   dvlb.csr_i    := tlbcsr
+  dvlb.sfence_i := sfence
   dvlb.flush_i  := false.B
 
   for (i <- 0 until (exuParameters.LduCnt + exuParameters.StuCnt)) {
@@ -259,8 +261,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     dvlb.pmp_i(i) <> pmp_check(i).resp
   }
 
-  io.ptw_mg.ptw_req_o <> dvlb.ptw_req_o
-  io.ptw_mg.ptw_res_i <> dvlb.ptw_res_i
+  io.ttw <> dvlb.ttw_o
 
   val tdata = RegInit(VecInit(Seq.fill(6)(0.U.asTypeOf(new MatchTriggerIO))))
   val tEnable = RegInit(VecInit(Seq.fill(6)(false.B)))

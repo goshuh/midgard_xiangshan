@@ -83,6 +83,14 @@ trait HasCSRConst {
   val Sfsbhead      = 0x9f2
   val Sfsbtail      = 0x9f3
 
+  // user translation
+  val Usdid         = 0x080
+
+  val Suatp         = 0x9f8
+  val Suatc         = 0x9f9
+  val Suatl         = 0x9fa
+  val Suath         = 0x9fb
+
   // Machine Information Registers
   val Mvendorid     = 0xF11
   val Marchid       = 0xF12

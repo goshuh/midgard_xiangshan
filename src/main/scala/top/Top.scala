@@ -28,7 +28,7 @@ import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.jtag.JTAGIO
 import freechips.rocketchip.util.{ElaborationArtefacts, HasRocketChipStageUtils, UIntToOH1}
-import huancun.{HCCacheParamsKey, HuanCun}
+import huancun.{HCCacheParamsKey, MidgardKey, HuanCun}
 
 abstract class BaseXSSoc()(implicit p: Parameters) extends LazyModule
   with BindingScope
@@ -72,6 +72,7 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
   val l3cacheOpt = soc.L3CacheParamsOpt.map(l3param =>
     LazyModule(new HuanCun()(new Config((_, _, _) => {
       case HCCacheParamsKey => l3param
+      case MidgardKey       => p(MidgardKey)
     })))
   )
 
@@ -167,6 +168,18 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
         node.out.head._1 := false.B
       }
     }
+
+    l3cacheOpt.foreach(l => {
+      for ((c, i) <- core_with_l2.zipWithIndex) {
+        withClockAndReset(io.clock.asClock, io.reset) {
+          val mcn_q = RegNext(l.module.io.vtd.mcn)
+
+          c.module.io.vtd.wnr := RegNext(l.module.io.vtd.wnr && l.module.io.vtd.vec(i), false.B)
+          c.module.io.vtd.mcn := mcn_q
+          c.module.io.vtd.vec := DontCare
+        }
+      }
+    })
 
     misc.module.debug_module_io.resetCtrl.hartIsInReset := core_with_l2.map(_.module.reset.asBool)
     misc.module.debug_module_io.clock := io.clock
