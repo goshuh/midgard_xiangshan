@@ -21,7 +21,8 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
     clients = Seq(TLMasterParameters.v1(
       "ttw",
       sourceId = IdRange(0, mgFSParam.ttwNum)
-    ))
+    )),
+    requestFields = Seq(VTDIField())
   )))
 
   lazy val module = new LazyModuleImp(this) {
