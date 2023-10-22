@@ -1,6 +1,7 @@
 package xiangshan
 
 import chisel3._
+import chisel3.util._
 import chipsalliance.rocketchip.config.{Config, Parameters}
 import chisel3.util.{Valid, ValidIO}
 import freechips.rocketchip.diplomacy.{BundleBridgeSink, LazyModule, LazyModuleImp, LazyModuleImpLike, ResourceBinding}
@@ -140,7 +141,7 @@ class XSTile()(implicit p: Parameters) extends LazyModule
       val hartId = Input(UInt(64.W))
       val reset_vector = Input(UInt(PAddrBits.W))
       val cpu_halt = Output(Bool())
-      val vtd = Input(new frontside.VTDReq(mgFSParam))
+      val vtd = Flipped(Decoupled(new frontside.VTDReq(mgFSParam)))
     })
 
     dontTouch(io.hartId)

@@ -255,7 +255,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
     val l2_pf_enable = Output(Bool())
     val perfEvents = Input(Vec(numPCntHc * coreParams.L2NBanks, new PerfEvent))
     val beu_errors = Output(new XSL1BusErrors())
-    val vtd = Input(new frontside.VTDReq(mgFSParam))
+    val vtd = Flipped(Decoupled(new frontside.VTDReq(mgFSParam)))
   })
 
   println(s"FPGAPlatform:${env.FPGAPlatform} EnableDebug:${env.EnableDebug}")
@@ -440,7 +440,29 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   ttw.vlb_i(0) <> frontend.io.ttw
   ttw.vlb_i(1) <> memBlock.io.ttw
 
-  ttw.vtd_i    <> io.vtd
+  val vtd_mask = ~0.U((PAddrBits - 26).W) ## csrioIn.tlb.uatc.tmask
+  val vtd_req  =  memBlock.io.vtd.wnr &&
+                    ((vtd_mask &  memBlock.io.vtd.mcn) ===
+                     (vtd_mask & (csrioIn.tlb.uatp.base << 6)))
+
+  // back-pressure
+  val vtd_q = Module(new Queue(UInt(mgFSParam.mcnBits.W), coreParams.StoreBufferSize, false, true))
+
+  assert(!(vtd_req && !vtd_q.io.enq.ready))
+
+  vtd_q.io.enq.valid := vtd_req || io.vtd.valid
+  vtd_q.io.enq.bits  := Mux(vtd_req, memBlock.io.vtd.mcn,
+                                     io.vtd.bits.mcn)
+
+  io.vtd.ready       := vtd_q.io.enq.ready && !vtd_req
+
+  ttw.vtd_i.valid    := vtd_q.io.deq.valid
+  ttw.vtd_i.bits     := frontside.VTDReq(mgFSParam,
+                                         true.B,
+                                         vtd_q.io.deq.bits,
+                                         0.U)
+
+  vtd_q.io.deq.ready := ttw.vtd_i.ready
 
   // if l2 prefetcher use stream prefetch, it should be placed in XSCore
   io.l2_pf_enable := csrioIn.customCtrl.l2_pf_enable

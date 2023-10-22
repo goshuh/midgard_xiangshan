@@ -30,6 +30,8 @@ import huancun.{AliasField, AliasKey, DirtyField, PreferCacheField, PrefetchFiel
 import huancun.utils.FastArbiter
 import mem.{AddPipelineReg}
 
+import midgard._
+
 import scala.math.max
 
 // DCache specific parameters
@@ -418,6 +420,7 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val tlb = Input(new TlbCsrBundle())
   val ise  = Output(Bool())
   val fsbc = new FSBCIO()
+  val vtd  = Output(new frontside.VTDReq(mgFSParam))
   val mshrFull = Output(Bool())
 }
 
@@ -494,6 +497,8 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   missQueue.io.hartId := io.hartId
   io.ise  := fsbc.io.ise
   io.fsbc <> fsbc.io.fsbc
+
+  io.vtd  := mainPipe.io.vtd
 
   val errors = ldu.map(_.io.error) ++ // load error
     Seq(mainPipe.io.error) // store / misc error 
@@ -625,12 +630,12 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   missQueue.io.main_pipe_resp := RegNext(mainPipe.io.atomic_resp)
 
   // user translation
-  val vtdi_mask = ~0.U((PAddrBits - 26).W) ## io.tlb.uatc.tmask
+  val vtd_mask = ~0.U((PAddrBits - 26).W) ## io.tlb.uatc.tmask
 
   bus.a.bits.user.lift(VTDIKey).foreach(_ :=
     bus.a.valid &&
-      ((vtdi_mask & (bus.a.bits.address >> 6)) ===
-       (vtdi_mask & (io.tlb.uatp.base   << 6))))
+      ((vtd_mask & (bus.a.bits.address >> 6)) ===
+       (vtd_mask & (io.tlb.uatp.base   << 6))))
 
   //----------------------------------------
   // probe

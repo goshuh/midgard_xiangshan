@@ -170,15 +170,19 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
     }
 
     l3cacheOpt.foreach(l => {
-      for ((c, i) <- core_with_l2.zipWithIndex) {
-        withClockAndReset(io.clock.asClock, io.reset) {
-          val mcn_q = RegNext(l.module.io.vtd.mcn)
+      val per = Wire(Vec(NumCores, Bool()))
+      val all =  Cat(per).andR
 
-          c.module.io.vtd.wnr := RegNext(l.module.io.vtd.wnr && l.module.io.vtd.vec(i), false.B)
-          c.module.io.vtd.mcn := mcn_q
-          c.module.io.vtd.vec := DontCare
-        }
+      for ((c, i) <- core_with_l2.zipWithIndex) {
+        per(i) := l.module.io.vtd.valid &&
+                     (l.module.io.vtd.bits.vec(i) && c.module.io.vtd.ready ||
+                     !l.module.io.vtd.bits.vec(i))
+
+        c.module.io.vtd.valid := l.module.io.vtd.bits.vec(i) && all
+        c.module.io.vtd.bits  := l.module.io.vtd.bits
       }
+
+      l.module.io.vtd.ready := all
     })
 
     misc.module.debug_module_io.resetCtrl.hartIsInReset := core_with_l2.map(_.module.reset.asBool)

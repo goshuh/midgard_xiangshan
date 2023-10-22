@@ -31,6 +31,8 @@ import xiangshan.cache.mmu.{VectorTlbPtwIO, TLBNonBlock, TlbReplace, FSTWIO, FSV
 import xiangshan.mem._
 import system._
 
+import midgard._
+
 class Std(implicit p: Parameters) extends FunctionUnit {
   io.in.ready := true.B
   io.out.valid := io.in.valid
@@ -76,6 +78,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val otherFastWakeup = Vec(exuParameters.LduCnt + 2 * exuParameters.StuCnt, ValidIO(new MicroOp))
     val isec = new ISECIO()
     val fsbc = new FSBCIO()
+    val vtd  = Output(new frontside.VTDReq(mgFSParam))
     // misc
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
@@ -171,6 +174,8 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   io.isec.empty := RegNext(sbuffer.io.isec.empty, true.B)
 
   io.fsbc       <> dcache.io.fsbc
+
+  io.vtd        := dcache.io.vtd
 
   sbuffer.io.isec.drain := RegNext(io.isec.expt || io.isec.drain, false.B)
   sbuffer.io.isec.valid := DontCare

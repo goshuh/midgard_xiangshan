@@ -540,11 +540,6 @@ class FSBCIO(implicit p: Parameters) extends XSBundle {
   val tail  = Output(UInt(XLEN.W))
 }
 
-class VTDIIO(implicit p: Parameters) extends XSBundle {
-  val req   = Input (new frontside.VTDReq(mgFSParam))
-  val uatp  = Input (UInt(64.W))
-}
-
 class CustomCSRCtrlIO(implicit p: Parameters) extends XSBundle {
   // Prefetcher
   val l1I_pf_enable = Output(Bool())
