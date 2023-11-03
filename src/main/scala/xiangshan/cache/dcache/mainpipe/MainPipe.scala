@@ -112,7 +112,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
     // write-back queue
     val wb = DecoupledIO(new WritebackReq)
 
-    val vtd = Output(new frontside.VTDReq(mgFSParam))
+    val vtd = Decoupled(new frontside.VTDReq(mgFSParam))
 
     val data_read_intend = Output(Bool())
     val data_read = DecoupledIO(new L1BankedDataReadLineReq)
@@ -747,9 +747,10 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.wb.bits.delay_release := s3_req.replace
   io.wb.bits.miss_id := s3_req.miss_id
 
-  io.vtd.wnr := s3_valid && (s3_store_hit || s3_amo_hit)
-  io.vtd.mcn := s3_req.addr >> blockOffBits
-  io.vtd.vec := DontCare
+  io.vtd.valid    := s3_valid && (s3_store_hit || s3_amo_hit)
+  io.vtd.bits.wnr := DontCare
+  io.vtd.bits.mcn := s2_req.addr >> blockOffBits
+  io.vtd.bits.vec := DontCare
 
   io.replace_access.valid := RegNext(s1_fire && (s1_req.isAMO || s1_req.isStore) && !s1_req.probe)
   io.replace_access.bits.set := s2_idx

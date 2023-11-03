@@ -78,7 +78,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val otherFastWakeup = Vec(exuParameters.LduCnt + 2 * exuParameters.StuCnt, ValidIO(new MicroOp))
     val isec = new ISECIO()
     val fsbc = new FSBCIO()
-    val vtd  = Output(new frontside.VTDReq(mgFSParam))
+    val vtd  = Decoupled(new frontside.VTDReq(mgFSParam))
     // misc
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
@@ -175,7 +175,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
 
   io.fsbc       <> dcache.io.fsbc
 
-  io.vtd        := dcache.io.vtd
+  io.vtd        <> dcache.io.vtd
 
   sbuffer.io.isec.drain := RegNext(io.isec.expt || io.isec.drain, false.B)
   sbuffer.io.isec.valid := DontCare
@@ -520,6 +520,8 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   // something must have gone wrong
   assert(!(fenceFlush && atomicsFlush))
   sbuffer.io.flush.valid := RegNext(fenceFlush || atomicsFlush)
+
+  sbuffer.io.tlbcsr := tlbcsr
 
   // AtomicsUnit: AtomicsUnit will override other control signials,
   // as atomics insts (LR/SC/AMO) will block the pipeline

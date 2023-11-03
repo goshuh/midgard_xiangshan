@@ -116,6 +116,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     val sqempty = Input(Bool())
     val flush = Flipped(new SbufferFlushBundle)
     val csrCtrl = Flipped(new CustomCSRCtrlIO)
+    val tlbcsr = Input(new TlbCsrBundle())
     val isec = new ISECIO()
   })
 
@@ -131,6 +132,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   val stateVec = RegInit(VecInit(Seq.fill(StoreBufferSize)(0.U.asTypeOf(new SbufferEntryState))))
   val cohCount = RegInit(VecInit(Seq.fill(StoreBufferSize)(0.U(EvictCountBits.W))))
   val missqReplayCount = RegInit(VecInit(Seq.fill(StoreBufferSize)(0.U(MissqReplayCountBits.W))))
+  val vtdVec = Reg(Vec(StoreBufferSize, Bool()))
 
   val willSendDcacheReq = Wire(Bool())
 
@@ -261,10 +263,15 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     io.in(i).ready := canInserts(i) && (if (i == 0) 1.B else !sameWord(0)(i) && io.in(i - 1).ready)
   )
 
+  val vtd_mask = ~0.U((PAddrBits - 26).W) ## io.tlbcsr.uatc.tmask
+
   def wordReqToBufLine(req: DCacheWordReq, reqptag: UInt, reqvtag: UInt, insertIdx: UInt, insertVec: UInt, wordOffset: UInt, flushMask: Bool): Unit = {
     assert(UIntToOH(insertIdx) === insertVec)
     val sameBlockInflightMask = genSameBlockInflightMask(reqptag)
     (0 until StoreBufferSize).map(entryIdx => {
+      val vtd_hit = (vtd_mask & reqptag) ===
+                    (vtd_mask & io.tlbcsr.uatp.base << 6)
+
       when(insertVec(entryIdx)){
         stateVec(entryIdx).state_valid := true.B
         stateVec(entryIdx).w_sameblock_inflight := sameBlockInflightMask.orR // set w_sameblock_inflight when a line is first allocated
@@ -275,6 +282,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
         // missqReplayCount(insertIdx) := 0.U
         ptag(entryIdx) := reqptag
         vtag(entryIdx) := reqvtag // update vtag iff a new sbuffer line is allocated
+        vtdVec(entryIdx) := vtd_hit
         when(flushMask){
           for(j <- 0 until CacheLineWords){
             for(i <- 0 until DataBytes){
@@ -491,6 +499,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   io.dcache.req.bits.data  := data(evictionIdxReg).asUInt
   io.dcache.req.bits.mask  := mask(evictionIdxReg).asUInt
   io.dcache.req.bits.id := evictionIdxReg
+  io.dcache.vtd := vtdVec(evictionIdxReg)
 
   drain_req := store_faults.asUInt.orR && io.dcache.exception_ready && !RegNext(willSendDcacheReq && drain_req, false.B)
 

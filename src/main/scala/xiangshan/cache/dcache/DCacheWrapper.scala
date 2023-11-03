@@ -393,6 +393,7 @@ class DCacheLineIO(implicit p: Parameters) extends DCacheBundle
 class DCacheToSbufferIO(implicit p: Parameters) extends DCacheBundle { 
   // sbuffer will directly send request to dcache main pipe
   val req = Flipped(Decoupled(new DCacheLineReq))
+  val vtd = Input(Bool())
   val exception_ready = Output(Bool())
 
   val main_pipe_hit_resp = ValidIO(new DCacheLineResp)
@@ -420,7 +421,7 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val tlb = Input(new TlbCsrBundle())
   val ise  = Output(Bool())
   val fsbc = new FSBCIO()
-  val vtd  = Output(new frontside.VTDReq(mgFSParam))
+  val vtd  = Decoupled(new frontside.VTDReq(mgFSParam))
   val mshrFull = Output(Bool())
 }
 
@@ -498,7 +499,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   io.ise  := fsbc.io.ise
   io.fsbc <> fsbc.io.fsbc
 
-  io.vtd  := mainPipe.io.vtd
+  io.vtd  <> mainPipe.io.vtd
 
   val errors = ldu.map(_.io.error) ++ // load error
     Seq(mainPipe.io.error) // store / misc error 
@@ -656,7 +657,9 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   mainPipe.io.store_req.valid := io.lsu.store.req.valid && !refillPipe.io.req.valid && sb_norm
   mainPipe.io.store_req.bits  := io.lsu.store.req.bits
 
-  io.lsu.store.req.ready := mainPipe.io.store_req.ready && !refillPipe.io.req.valid || sb_drain
+  val vtd_pend = io.lsu.store.req.valid && io.lsu.store.vtd && !mainPipe.io.vtd.ready
+
+  io.lsu.store.req.ready := mainPipe.io.store_req.ready && !refillPipe.io.req.valid && !vtd_pend || sb_drain
 
   io.lsu.store.replay_resp := RegNext(mainPipe.io.store_replay_resp)
   io.lsu.store.main_pipe_hit_resp := mainPipe.io.store_hit_resp
