@@ -444,7 +444,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   val vtd_ext  =  io.vtd
 
   val vtd_mask = ~0.U((PAddrBits - 26).W) ## csrioIn.tlb.uatc.tmask
-  val vtd_req  =  vtd_int.valid &&
+  val vtd_req  =  vtd_int.valid && csrioIn.tlb.uatp.en &&
                       RegNext((vtd_mask &  vtd_int.bits.mcn) ===
                               (vtd_mask & (csrioIn.tlb.uatp.base << 6)))
 

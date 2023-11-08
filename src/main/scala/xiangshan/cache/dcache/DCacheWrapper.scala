@@ -634,7 +634,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   val vtd_mask = ~0.U((PAddrBits - 26).W) ## io.tlb.uatc.tmask
 
   bus.a.bits.user.lift(VTDIKey).foreach(_ :=
-    bus.a.valid &&
+    bus.a.valid && io.tlb.uatp.en &&
       ((vtd_mask & (bus.a.bits.address >> 6)) ===
        (vtd_mask & (io.tlb.uatp.base   << 6))))
 
