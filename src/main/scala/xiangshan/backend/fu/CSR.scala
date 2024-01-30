@@ -436,7 +436,8 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val pmaMapping = pmp_gen_mapping(pma_init, NumPMA, PmacfgBase, PmaaddrBase, pma)
 
   // user translation
-  val usdid = dontTouch(RegInit(0.U(64.W)))
+  val ucid  = dontTouch(RegInit(0.U(64.W)))
+  val ucsp  = dontTouch(RegInit(0.U(64.W)))
 
   val suatp = dontTouch(RegInit(0.U(64.W)))
   val suatc = dontTouch(RegInit(0.U(64.W)))
@@ -691,7 +692,8 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     MaskedRegMap(Srnctl, srnctl),
 
     // user translation
-    MaskedRegMap(Usdid,  usdid),
+    MaskedRegMap(Ucid,   ucid),
+    MaskedRegMap(Ucsp,   ucsp),
 
     MaskedRegMap(Suatp,  suatp),
     MaskedRegMap(Suatc,  suatc),
@@ -898,18 +900,18 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val resetSatp = addr === Satp.U && wen // write to satp will cause the pipeline be flushed
   val resetSuatp = addr === Suatp.U && wen
   val resetSuatc = addr === Suatc.U && wen
-  val resetUsdid = addr === Usdid.U && wen
-  flushPipe := resetSatp || resetSuatp || resetSuatc || resetUsdid || (valid && func === CSROpType.jmp && !isEcall && !isEbreak)
+  val resetUcid  = addr === Ucid.U  && wen
+  flushPipe := resetSatp || resetSuatp || resetSuatc || resetUcid || (valid && func === CSROpType.jmp && !isEcall && !isEbreak)
 
   tlbBundle.satp.apply(satp)
   tlbBundle.uatp.apply(suatp)
   tlbBundle.uatc.apply(suatc, wdata, resetSuatc)
-  tlbBundle.sdid.apply(usdid)
+  tlbBundle.ucid.apply(ucid)
 
   tlbBundle.satp_changed := RegNext(resetSatp,  false.B)
   tlbBundle.uatp_changed := RegNext(resetSuatp, false.B)
   tlbBundle.uatc_changed := RegNext(resetSuatc, false.B)
-  tlbBundle.sdid_changed := RegNext(resetUsdid, false.B)
+  tlbBundle.ucid_changed := RegNext(resetUcid,  false.B)
 
 
   retTarget := DontCare

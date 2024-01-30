@@ -114,6 +114,7 @@ class CtrlFlow(implicit p: Parameters) extends XSBundle {
   val instr = UInt(32.W)
   val pc = UInt(VAddrBits.W)
   val foldpc = UInt(MemPredPCWidth.W)
+  val priv = Bool()
   val exceptionVec = ExceptionVec()
   val trigger = new TriggerCf
   val pd = new PreDecodeInfo
@@ -293,6 +294,7 @@ class Redirect(implicit p: Parameters) extends XSBundle {
   val ftqOffset = UInt(log2Up(PredictWidth).W)
   val level = RedirectLevel()
   val interrupt = Bool()
+  val priv = Bool()
   val cfiUpdate = new CfiUpdateInfo
 
   val stFtqIdx = new FtqPtr // for load violation predict
@@ -368,6 +370,7 @@ class RobCommitInfo(implicit p: Parameters) extends XSBundle {
   val old_pdest = UInt(PhyRegIdxWidth.W)
   val ftqIdx = new FtqPtr
   val ftqOffset = UInt(log2Up(PredictWidth).W)
+  val priv = Bool()
 
   // these should be optimized for synthesis verilog
   val pc = UInt(VAddrBits.W)
@@ -457,7 +460,9 @@ class TlbUatcBundle(implicit p: Parameters) extends frontside.VSCCfg {
     val new_siz = new_uatc(29, 24)
 
     // just let the synthesizer do the optimization
-    tsl   := RegEnable( new_vsc - new_idx + 1.U,  wr)
+    val new_tvi = new_top + new_idx + ~new_vsc
+
+    tvi   := RegEnable( new_tvi,                  wr)
     mmask := RegEnable( mask(new_idx),            wr)
     imask := RegEnable( mask(new_vsc) >> new_idx, wr)
     vmask := RegEnable( mask(new_top) >> new_vsc, wr)
@@ -465,11 +470,11 @@ class TlbUatcBundle(implicit p: Parameters) extends frontside.VSCCfg {
   }
 }
 
-class TlbSdidBundle(implicit p: Parameters) extends XSBundle {
-  val sdid = UInt(mgFSParam.sdidBits.W)
+class TlbUcidBundle(implicit p: Parameters) extends XSBundle {
+  val ucid = UInt(mgFSParam.csidBits.W)
 
   def apply(value: UInt): Unit = {
-    sdid := value(mgFSParam.sdidBits - 1, 0)
+    ucid := value(mgFSParam.csidBits - 1, 0)
   }
 }
 
@@ -477,12 +482,12 @@ class TlbCsrBundle(implicit p: Parameters) extends XSBundle {
   val satp = new TlbSatpBundle()
   val uatp = new TlbUatpBundle()
   val uatc = new TlbUatcBundle()
-  val sdid = new TlbSdidBundle()
+  val ucid = new TlbUcidBundle()
 
   val satp_changed = Bool()
   val uatp_changed = Bool()
   val uatc_changed = Bool()
-  val sdid_changed = Bool()
+  val ucid_changed = Bool()
 
   val priv = new Bundle {
     val mxr = Bool()

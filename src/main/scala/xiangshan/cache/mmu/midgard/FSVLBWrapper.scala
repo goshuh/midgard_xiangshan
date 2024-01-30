@@ -9,22 +9,28 @@ import  xiangshan._
 import  xiangshan.backend.fu._
 import  xiangshan.backend.fu.util._
 import  huancun._
+import  utils._
 
 import  chipsalliance.rocketchip.config._
 
 
 class FSTWIO(P: Param)(implicit p: Parameters) extends Bundle {
-  val ttw_req_o =         Valid(new frontside.VLBReq(P))
-  val ttw_res_i = Flipped(Valid(new frontside.VMA   (P)))
-  val ttw_ext_i =         Input(new frontside.TTWExt(P))
+  val ttw_req_o   =         Valid(new frontside.VLBReq(P))
+  val ttw_res_i   = Flipped(Valid(new frontside.VMA   (P)))
+  val ttw_ext_i   =         Input(new frontside.TTWExt(P))
 
-  val vtd_req_i =         Input(new frontside.VTDReq(P))
+  val vtd_req_i   =         Input(new frontside.VTDReq(P))
+
+  val kill_o      =        Output(UInt(3.W))
+  val kill_asid_o =        Output(UInt(P.asidBits.W))
+  val kill_csid_o =        Output(UInt(P.csidBits.W))
 }
 
 
 class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) extends Module
   with HasXSParameter
-  with HasCSRConst {
+  with HasCSRConst
+  with HasPerfEvents {
 
   // --------------------------
   // io
@@ -62,7 +68,7 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
 
   u_vlb.uatc_i      := csr_i.uatc
   u_vlb.asid_i      := csr_i.satp.asid
-  u_vlb.sdid_i      := csr_i.sdid.sdid
+  u_vlb.csid_i      := csr_i.ucid.ucid
 
   u_vlb.kill_i      := sfence_all ##
                        sfence_one ##
@@ -70,11 +76,11 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
                        csr_i.satp_changed ||
                        csr_i.uatp_changed ||
                        csr_i.uatc_changed ||
-                       csr_i.sdid_changed ||
+                       csr_i.ucid_changed ||
                        flush_i)
 
   u_vlb.kill_asid_i := sfence_i.bits.asid
-  u_vlb.kill_sdid_i := csr_i.sdid.sdid
+  u_vlb.kill_csid_i := csr_i.ucid.ucid
 
   u_vlb.vtd_req_i   := ttw_o.vtd_req_i
   u_vlb.ttw_ext_i   := ttw_o.ttw_ext_i
@@ -82,9 +88,16 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
   ttw_o.ttw_req_o   <> u_vlb.ttw_req_o
   ttw_o.ttw_res_i   <> u_vlb.ttw_res_i
 
+  ttw_o.kill_o      := u_vlb.kill_i
+  ttw_o.kill_asid_o := u_vlb.kill_asid_i
+  ttw_o.kill_csid_o := u_vlb.kill_csid_i
+
 
   //
   // connect
+
+  val s0_sel_vlb = Pin(Vec(N, Bool()))
+  val s1_sel_vlb = Pin(Vec(N, Bool()))
 
   for (i <- 0 until N) {
     val tlb_req      = tlb_o(i).req
@@ -152,7 +165,7 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
     val s1_vlb_x     = vlb_res_pld.x
     val s1_vlb_u     = vlb_res_pld.u
     val s1_vlb_g     = vlb_res_pld.g
-    val s1_vlb_z     = vlb_res_pld.z
+    val s1_vlb_p     = vlb_res_pld.p || !mode_u
     val s1_vlb_e     = vlb_res_pld.e
 
     val s1_vlb_xpf   = vlb_res_pld.err ||
@@ -174,6 +187,7 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
     src_res_pld.paddr           := s1_sel_q ??  s1_vlb_ma     :: tlb_res_pld.paddr
     src_res_pld.miss            := s1_sel_q ?? !s1_vlb_hit    :: tlb_res_pld.miss
     src_res_pld.fast_miss       := s1_sel_q ?? !s1_vlb_hit    :: tlb_res_pld.fast_miss
+    src_res_pld.priv            := s1_sel_q ??  s1_vlb_p      :: tlb_res_pld.priv
     src_res_pld.excp.pf.ld      := s1_sel_q ??  s1_vlb_lpf    :: tlb_res_pld.excp.pf.ld
     src_res_pld.excp.pf.st      := s1_sel_q ??  s1_vlb_spf    :: tlb_res_pld.excp.pf.st
     src_res_pld.excp.pf.instr   := s1_sel_q ??  s1_vlb_ipf    :: tlb_res_pld.excp.pf.instr
@@ -235,5 +249,15 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
     dst_pmp.st    := s2_sel_q ?? false.B    :: src_pmp.st
     dst_pmp.instr := s2_sel_q ?? false.B    :: src_pmp.instr
     dst_pmp.mmio  := s2_sel_q ?? s2_vlb_e_q :: src_pmp.mmio
+
+    s0_sel_vlb(i) := s0_sel
+    s1_sel_vlb(i) := s1_sel_q
   }
+
+  val perfEvents = Seq(
+    ("vlb_req",      PopCount(Cat(tlb_i.map(r => r.req .fire && !r.req .bits.kill).reverse) & s0_sel_vlb.asUInt)),
+    ("vlb_req_miss", PopCount(Cat(tlb_i.map(r => r.resp.fire &&  r.resp.bits.miss).reverse) & s1_sel_vlb.asUInt)),
+  )
+
+  generatePerfEvent()
 }

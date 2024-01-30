@@ -299,6 +299,10 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   val csrioIn = csrFenceMod.io.fuExtra.csrio.get
   val fenceio = csrFenceMod.io.fuExtra.fenceio.get
 
+  exuBlocks.filter(_.fuConfigs.map(_._1).contains(AluExeUnitCfg)).foreach {
+    _.io.fuExtra.uatc.get := csrioIn.tlb.uatc
+  }
+
   frontend.io.backend <> ctrlBlock.io.frontend
   frontend.io.sfence <> fenceio.sfence
   frontend.io.tlbCsr <> csrioIn.tlb
@@ -370,6 +374,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   ctrlBlock.perfinfo.perfEventsEu0 := exuBlocks(0).getPerf.dropRight(outer.exuBlocks(0).scheduler.numRs)
   ctrlBlock.perfinfo.perfEventsEu1 := exuBlocks(1).getPerf.dropRight(outer.exuBlocks(1).scheduler.numRs)
   memBlock.io.perfEventsPTW  := ptw.getPerf
+  memBlock.io.perfEventsTTW  := ttw.getPerf
   ctrlBlock.perfinfo.perfEventsRs  := outer.exuBlocks.flatMap(b => b.module.getPerf.takeRight(b.scheduler.numRs))
 
   csrioIn.hartId <> io.hartId
@@ -435,7 +440,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   ttw.uatp_i   := csrioIn.tlb.uatp.asUInt
   ttw.uatc_i   := csrioIn.tlb.uatc
   ttw.asid_i   := csrioIn.tlb.satp.asid
-  ttw.sdid_i   := csrioIn.tlb.sdid.sdid
+  ttw.csid_i   := csrioIn.tlb.ucid.ucid
 
   ttw.vlb_i(0) <> frontend.io.ttw
   ttw.vlb_i(1) <> memBlock.io.ttw
@@ -450,7 +455,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
 
   ttw.vtd_i.valid := vtd_req || vtd_ext.valid
   ttw.vtd_i.bits  := frontside.VTDReq(mgFSParam,
-                                      true.B,
+                                      2.U,
                                       Mux(vtd_req, vtd_int.bits.mcn, vtd_ext.bits.mcn),
                                       0.U)
 

@@ -43,6 +43,7 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
   val pred_taken = Bool()
   val ftqPtr = new FtqPtr
   val ftqOffset = UInt(log2Ceil(PredictWidth).W)
+  val priv = Bool()
   val ipf = Bool()
   val acf = Bool()
   val crossPageIPFFix = Bool()
@@ -56,6 +57,7 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
     pred_taken := fetch.ftqOffset(i).valid
     ftqPtr := fetch.ftqPtr
     ftqOffset := fetch.ftqOffset(i).bits
+    priv := fetch.priv(i)
     ipf := fetch.ipf(i)
     acf := fetch.acf(i)
     crossPageIPFFix := fetch.crossPageIPFFix(i)
@@ -68,6 +70,7 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
     cf.instr := inst
     cf.pc := pc
     cf.foldpc := foldpc
+    cf.priv := priv
     cf.exceptionVec := 0.U.asTypeOf(ExceptionVec())
     cf.exceptionVec(instrPageFault) := ipf
     cf.exceptionVec(instrAccessFault) := acf

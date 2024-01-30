@@ -310,6 +310,8 @@ package object xiangshan {
     def szewl3     = "b101_1010".U
     def byte2      = "b101_1011".U
 
+    def uat        = "b101_1111".U
+
     def andlsb     = "b110_0000".U
     def andzexth   = "b110_0001".U
     def orlsb      = "b110_0010".U

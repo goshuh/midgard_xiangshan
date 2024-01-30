@@ -102,6 +102,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
       val dcacheMSHRFull = Output(Bool())
     }
     val perfEventsPTW = Input(Vec(19, new PerfEvent))
+    val perfEventsTTW = Input(Vec(5,  new PerfEvent))
     val lqCancelCnt = Output(UInt(log2Up(LoadQueueSize + 1).W))
     val sqCancelCnt = Output(UInt(log2Up(StoreQueueSize + 1).W))
     val sqDeq = Output(UInt(log2Ceil(EnsbufferWidth + 1).W))
@@ -621,11 +622,12 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
   val csrevents = pfevent.io.hpmevent.slice(16,24)
 
   val memBlockPerfEvents = Seq(
+    ("none",       0.U),
     ("ldDeqCount", ldDeqCount),
     ("stDeqCount", stDeqCount),
   )
-  val allPerfEvents = memBlockPerfEvents ++ (loadUnits ++ Seq(sbuffer, lsq, dcache)).flatMap(_.getPerfEvents)
-  val hpmEvents = allPerfEvents.map(_._2.asTypeOf(new PerfEvent)) ++ io.perfEventsPTW
+  val allPerfEvents = memBlockPerfEvents ++ (loadUnits ++ Seq(sbuffer, lsq, dcache, dvlb)).flatMap(_.getPerfEvents)
+  val hpmEvents = allPerfEvents.map(_._2.asTypeOf(new PerfEvent)) ++ io.perfEventsPTW ++ io.perfEventsTTW
   val perfEvents = HPerfMonitor(csrevents, hpmEvents).getPerfEvents
   generatePerfEvent()
 }

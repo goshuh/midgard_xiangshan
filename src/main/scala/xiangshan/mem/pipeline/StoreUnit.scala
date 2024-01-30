@@ -134,8 +134,14 @@ class StoreUnit_S1(implicit p: Parameters) extends XSModule {
   io.out.bits.paddr := s1_paddr
   io.out.bits.miss := false.B
   io.out.bits.mmio := s1_mmio
+
+  /* GOSH
+  val priv_chk = io.dtlbResp.bits.priv && !io.in.bits.uop.cf.priv
+  */
+  val priv_chk = false.B
+
   io.out.bits.uop.cf.exceptionVec(storePageFault) := io.dtlbResp.bits.excp.pf.st
-  io.out.bits.uop.cf.exceptionVec(storeAccessFault) := io.dtlbResp.bits.excp.af.st
+  io.out.bits.uop.cf.exceptionVec(storeAccessFault) := io.dtlbResp.bits.excp.af.st || priv_chk
 
   io.lsq.valid := io.in.valid
   io.lsq.bits := io.out.bits

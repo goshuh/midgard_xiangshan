@@ -86,6 +86,7 @@ class Jump(implicit p: Parameters) extends FUWithRedirect {
   redirectOutValid := valid && !jumpDataModule.io.isAuipc
   redirectOut := DontCare
   redirectOut.level := RedirectLevel.flushAfter
+  redirectOut.priv := uop.cf.priv
   redirectOut.robIdx := uop.robIdx
   redirectOut.ftqIdx := uop.cf.ftqPtr
   redirectOut.ftqOffset := uop.cf.ftqOffset

@@ -134,6 +134,7 @@ class TLB(Width: Int, Block: Seq[Boolean], q: TLBParameters)(implicit p: Paramet
     resp(i).bits.paddr := Mux(vmEnable, paddr, vaddr)
     resp(i).bits.miss := miss
     resp(i).bits.fast_miss := fast_miss
+    resp(i).bits.priv := mode =/= ModeU
     resp(i).bits.ptwBack := ptw.resp.fire()
 
     val pmp_paddr = Mux(vmEnable, Cat(Mux(p_hit, p_ppn, e_super_ppn), get_off(req_out(i).vaddr)), vaddr)

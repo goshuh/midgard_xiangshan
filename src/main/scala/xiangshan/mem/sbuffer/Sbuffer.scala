@@ -132,7 +132,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   val stateVec = RegInit(VecInit(Seq.fill(StoreBufferSize)(0.U.asTypeOf(new SbufferEntryState))))
   val cohCount = RegInit(VecInit(Seq.fill(StoreBufferSize)(0.U(EvictCountBits.W))))
   val missqReplayCount = RegInit(VecInit(Seq.fill(StoreBufferSize)(0.U(MissqReplayCountBits.W))))
-  val vtdVec = Reg(Vec(StoreBufferSize, Bool()))
+  val vtd_vec = Reg(Vec(StoreBufferSize, Bool()))
 
   val willSendDcacheReq = Wire(Bool())
 
@@ -264,13 +264,13 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   )
 
   val vtd_mask = ~0.U((PAddrBits - 26).W) ## io.tlbcsr.uatc.tmask
+  val vtd_base =  vtd_mask & (io.tlbcsr.uatp.base << 6)
 
   def wordReqToBufLine(req: DCacheWordReq, reqptag: UInt, reqvtag: UInt, insertIdx: UInt, insertVec: UInt, wordOffset: UInt, flushMask: Bool): Unit = {
     assert(UIntToOH(insertIdx) === insertVec)
     val sameBlockInflightMask = genSameBlockInflightMask(reqptag)
     (0 until StoreBufferSize).map(entryIdx => {
-      val vtd_hit = (vtd_mask & reqptag) ===
-                    (vtd_mask & io.tlbcsr.uatp.base << 6)
+      val vtd = (vtd_mask & reqptag) === vtd_base
 
       when(insertVec(entryIdx)){
         stateVec(entryIdx).state_valid := true.B
@@ -282,7 +282,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
         // missqReplayCount(insertIdx) := 0.U
         ptag(entryIdx) := reqptag
         vtag(entryIdx) := reqvtag // update vtag iff a new sbuffer line is allocated
-        vtdVec(entryIdx) := vtd_hit
+        vtd_vec(entryIdx) := vtd
         when(flushMask){
           for(j <- 0 until CacheLineWords){
             for(i <- 0 until DataBytes){
@@ -452,7 +452,9 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
       Mux(cohHasTimeOut, cohTimeOutIdx, replaceIdx))
     )
   )
-  
+
+  val vtd_rdy = Wire(Bool())
+
   /*
       If there is a inflight dcache req which has same ptag with evictionIdx's ptag,
       current eviction should be blocked.
@@ -462,7 +464,7 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   assert(!(stateVec(evictionIdx).isDcacheReqCandidate && !noSameBlockInflight(evictionIdx)))
   val prepareValidReg = RegInit(false.B)
   // when canSendDcacheReq, send dcache req stored in pipeline reg to dcache
-  val canSendDcacheReq = io.dcache.req.ready || !prepareValidReg
+  val canSendDcacheReq = io.dcache.req.ready && vtd_rdy || !prepareValidReg
   // when willSendDcacheReq, read dcache req data and store them in a pipeline reg 
   willSendDcacheReq := prepareValid && canSendDcacheReq
   when(io.dcache.req.fire()){
@@ -491,7 +493,19 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   val evictionVTag = RegEnable(vtag(evictionIdx), willSendDcacheReq)
   val evictionDrain = RegEnable(drain_req, false.B, willSendDcacheReq)
 
-  io.dcache.req.valid := prepareValidReg
+  val vtd_vld_q = Wire(Bool())
+  val vtd_idx_q = Wire(UInt(SbufferIndexWidth.W))
+
+  // serialize vtd stores for vsc
+  val vtd_set = io.dcache.req.fire      && vtd_rdy   &&  vtd_vec(evictionIdxReg)
+  val vtd_clr = io.dcache.vtd_resp.fire && vtd_vld_q && (vtd_idx_q === io.dcache.vtd_resp.bits.id)
+
+  vtd_idx_q := RegEnable(evictionIdxReg, vtd_set)
+  vtd_vld_q := RegEnable(vtd_set && !vtd_clr, false.B, vtd_set || vtd_clr)
+
+  vtd_rdy := !(prepareValidReg && vtd_vec(evictionIdxReg) && vtd_vld_q)
+
+  io.dcache.req.valid := prepareValidReg && vtd_rdy
   io.dcache.req.bits := DontCare
   io.dcache.req.bits.cmd    := Mux(evictionDrain, MemoryOpConstants.M_DRAIN, MemoryOpConstants.M_XWR)
   io.dcache.req.bits.addr   := getAddr(evictionPTag)
@@ -499,7 +513,6 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   io.dcache.req.bits.data  := data(evictionIdxReg).asUInt
   io.dcache.req.bits.mask  := mask(evictionIdxReg).asUInt
   io.dcache.req.bits.id := evictionIdxReg
-  io.dcache.vtd := vtdVec(evictionIdxReg)
 
   drain_req := store_faults.asUInt.orR && io.dcache.exception_ready && !RegNext(willSendDcacheReq && drain_req, false.B)
 
@@ -720,7 +733,9 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
     ("sbuffer_1_4_valid ", (perf_valid_entry_count < (StoreBufferSize.U/4.U))                                                          ),
     ("sbuffer_2_4_valid ", (perf_valid_entry_count > (StoreBufferSize.U/4.U)) & (perf_valid_entry_count <= (StoreBufferSize.U/2.U))    ),
     ("sbuffer_3_4_valid ", (perf_valid_entry_count > (StoreBufferSize.U/2.U)) & (perf_valid_entry_count <= (StoreBufferSize.U*3.U/4.U))),
-    ("sbuffer_full_valid", (perf_valid_entry_count > (StoreBufferSize.U*3.U/4.U)))
+    ("sbuffer_full_valid", (perf_valid_entry_count > (StoreBufferSize.U*3.U/4.U))),
+    ("sbuffer_vtd_busy  ", PopCount(Cat(stateVec.map(_.state_inflight).reverse) & vtd_vec.asUInt)),
+    ("sbuffer_vtd_req   ", io.dcache.req.fire() && vtd_vec(evictionIdxReg))
   )
   generatePerfEvent()
 

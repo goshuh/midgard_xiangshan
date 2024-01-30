@@ -139,11 +139,14 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
         "b10".U   -> (in.src(0)(1,0) === 0.U), //w
         "b11".U   -> (in.src(0)(2,0) === 0.U)  //d
       ))
+
+      val priv_chk = io.dtlb.resp.bits.priv && !in.uop.cf.priv
+
       exceptionVec(storeAddrMisaligned) := !addrAligned
       exceptionVec(storePageFault)      := io.dtlb.resp.bits.excp.pf.st
       exceptionVec(loadPageFault)       := io.dtlb.resp.bits.excp.pf.ld
-      exceptionVec(storeAccessFault)    := io.dtlb.resp.bits.excp.af.st
-      exceptionVec(loadAccessFault)     := io.dtlb.resp.bits.excp.af.ld
+      exceptionVec(storeAccessFault)    := io.dtlb.resp.bits.excp.af.st || priv_chk && !is_lr
+      exceptionVec(loadAccessFault)     := io.dtlb.resp.bits.excp.af.ld || priv_chk &&  is_lr
       exceptionVec(delayedLoadFault)    := false.B
       exceptionVec(delayedStoreFault)   := false.B
       static_pm := io.dtlb.resp.bits.static_pm

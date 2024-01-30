@@ -84,7 +84,8 @@ trait HasCSRConst {
   val Sfsbtail      = 0x9f3
 
   // user translation
-  val Usdid         = 0x080
+  val Ucid          = 0x080
+  val Ucsp          = 0x081
 
   val Suatp         = 0x9f8
   val Suatc         = 0x9f9

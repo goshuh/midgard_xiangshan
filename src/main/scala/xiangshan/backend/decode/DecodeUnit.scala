@@ -71,6 +71,10 @@ trait DecodeUnitConstants
  * Decode constants for RV64
  */
 object X64Decode extends DecodeConstants {
+  // user translations
+  val UATT = BitPat("b100000000000?????000?????0001011")
+  val UATG = BitPat("b1000001??????????000?????0001011")
+
   val table: Array[(BitPat, List[BitPat])] = Array(
     LD      -> List(SrcType.reg, SrcType.imm, SrcType.X, FuType.ldu, LSUOpType.ld,  Y, N, N, N, N, N, SelImm.IMM_I),
     LWU     -> List(SrcType.reg, SrcType.imm, SrcType.X, FuType.ldu, LSUOpType.lwu, Y, N, N, N, N, N, SelImm.IMM_I),
@@ -93,7 +97,11 @@ object X64Decode extends DecodeConstants {
 
     RORW    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.rorw, Y, N, N, N, N, N, SelImm.X),
     RORIW   -> List(SrcType.reg, SrcType.imm, SrcType.X, FuType.alu, ALUOpType.rorw, Y, N, N, N, N, N, SelImm.IMM_I),
-    ROLW    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.rolw, Y, N, N, N, N, N, SelImm.X)
+    ROLW    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.rolw, Y, N, N, N, N, N, SelImm.X),
+
+    // nop
+    UATT    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.uat,  Y, N, N, N, N, N, SelImm.X),
+    UATG    -> List(SrcType.imm, SrcType.imm, SrcType.X, FuType.alu, ALUOpType.add,  N, N, N, N, N, N, SelImm.X)
   )
 }
 
@@ -610,9 +618,16 @@ class DecodeUnit(implicit p: Parameters) extends XSModule with DecodeUnitConstan
   // read dest location
   cs.ldest := ctrl_flow.instr(RD_MSB, RD_LSB)
 
+  // check for csrx ucid/ucsp and uatt
+  val priv_chk = !ctrl_flow.priv &&
+                    ((ctrl_flow.instr(31, 21) === 0x040.U) &&
+                     (ctrl_flow.instr(14, 12) =/= 0x000.U) &&
+                     (ctrl_flow.instr( 6,  0) === 0x073.U) ||
+                     (ctrl_flow.instr         === X64Decode.UATT))
+
   // fill in exception vector
   cf_ctrl.cf.exceptionVec := io.enq.ctrl_flow.exceptionVec
-  cf_ctrl.cf.exceptionVec(illegalInstr) := cs.selImm === SelImm.INVALID_INSTR
+  cf_ctrl.cf.exceptionVec(illegalInstr) := cs.selImm === SelImm.INVALID_INSTR || priv_chk
 
   when (!io.csrCtrl.svinval_enable) {
     val base_ii = cs.selImm === SelImm.INVALID_INSTR

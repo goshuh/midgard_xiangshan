@@ -393,13 +393,13 @@ class DCacheLineIO(implicit p: Parameters) extends DCacheBundle
 class DCacheToSbufferIO(implicit p: Parameters) extends DCacheBundle { 
   // sbuffer will directly send request to dcache main pipe
   val req = Flipped(Decoupled(new DCacheLineReq))
-  val vtd = Input(Bool())
   val exception_ready = Output(Bool())
 
   val main_pipe_hit_resp = ValidIO(new DCacheLineResp)
   val refill_hit_resp = ValidIO(new DCacheLineResp)
   val exception_resp = ValidIO(new DCacheLineResp)
 
+  val vtd_resp = ValidIO(new DCacheLineResp)
   val replay_resp = ValidIO(new DCacheLineResp)
 
   def hit_resps: Seq[ValidIO[DCacheLineResp]] = Seq(main_pipe_hit_resp, refill_hit_resp)
@@ -632,11 +632,13 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   // user translation
   val vtd_mask = ~0.U((PAddrBits - 26).W) ## io.tlb.uatc.tmask
+  val vtd_base =  vtd_mask & (io.tlb.uatp.base << 6)
 
   bus.a.bits.user.lift(VTDIKey).foreach(_ :=
-    bus.a.valid && io.tlb.uatp.en &&
-      ((vtd_mask & (bus.a.bits.address >> 6)) ===
-       (vtd_mask & (io.tlb.uatp.base   << 6))))
+    io.tlb.uatp.en && ((vtd_mask & (bus.a.bits.address >> 6)) === vtd_base))
+
+  bus.c.bits.user.lift(VTDIKey).foreach(_ :=
+    io.tlb.uatp.en && ((vtd_mask & (bus.c.bits.address >> 6)) === vtd_base))
 
   //----------------------------------------
   // probe
@@ -657,12 +659,11 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   mainPipe.io.store_req.valid := io.lsu.store.req.valid && !refillPipe.io.req.valid && sb_norm
   mainPipe.io.store_req.bits  := io.lsu.store.req.bits
 
-  val vtd_pend = io.lsu.store.req.valid && io.lsu.store.vtd && !mainPipe.io.vtd.ready
-
-  io.lsu.store.req.ready := mainPipe.io.store_req.ready && !refillPipe.io.req.valid && !vtd_pend || sb_drain
+  io.lsu.store.req.ready := mainPipe.io.store_req.ready && !refillPipe.io.req.valid || sb_drain
 
   io.lsu.store.replay_resp := RegNext(mainPipe.io.store_replay_resp)
   io.lsu.store.main_pipe_hit_resp := mainPipe.io.store_hit_resp
+  io.lsu.store.vtd_resp := mainPipe.io.store_vtd_resp
 
   arbiter_with_pipereg(
     in = Seq(missQueue.io.main_pipe_req, io.lsu.atomics.req),

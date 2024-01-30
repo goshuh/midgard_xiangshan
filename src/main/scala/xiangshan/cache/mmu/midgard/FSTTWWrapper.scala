@@ -25,7 +25,7 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
     requestFields = Seq(VTDIField())
   )))
 
-  lazy val module = new LazyModuleImp(this) {
+  lazy val module = new LazyModuleImp(this) with HasPerfEvents {
 
     // --------------------------
     // io
@@ -34,7 +34,7 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
     val uatp_i = IO(                          Input(UInt(64.W)))
     val uatc_i = IO(                          Input(new frontside.VSCCfg()))
     val asid_i = IO(                          Input(UInt(P.asidBits.W)))
-    val sdid_i = IO(                          Input(UInt(P.sdidBits.W)))
+    val csid_i = IO(                          Input(UInt(P.csidBits.W)))
 
     val vlb_i  = IO(Vec(P.ttwNum, Flipped(          new FSTWIO(P))))
     val vtd_i  = IO(              Flipped(Decoupled(new frontside.VTDReq(P))))
@@ -48,13 +48,18 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
 
     val u_ttw = Module(new frontside.VSC(P))
 
-    u_ttw.satp_i    := satp_i
-    u_ttw.uatp_i    := uatp_i
-    u_ttw.uatc_i    := uatc_i
-    u_ttw.asid_i    := asid_i
-    u_ttw.sdid_i    := sdid_i
+    u_ttw.satp_i      := satp_i
+    u_ttw.uatp_i      := uatp_i
+    u_ttw.uatc_i      := uatc_i
+    u_ttw.asid_i      := asid_i
+    u_ttw.csid_i      := csid_i
 
-    u_ttw.vtd_req_i <> vtd_i
+    u_ttw.vtd_req_i   <> vtd_i
+
+    // ad hoc, from the d-side
+    u_ttw.kill_i      := vlb_i.last.kill_o
+    u_ttw.kill_asid_i := vlb_i.last.kill_asid_o
+    u_ttw.kill_csid_i := vlb_i.last.kill_csid_o
 
     for (i <- 0 until P.ttwNum) {
       vlb_i(i).ttw_req_o <> u_ttw.vlb_req_i(i)
@@ -86,5 +91,33 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
     u_ttw.mem_res_i.bits.data := mem.d.bits.data
 
     mem.d.ready               := u_ttw.mem_res_i.ready
+
+    val req       = u_ttw.int_req_o(3)
+    val inv       = u_ttw.int_req_o(2)
+    val hit_any   = u_ttw.int_req_o(1)
+    val clr_any   = u_ttw.int_req_o(0)
+
+    val mem_req   = mem.a.fire
+    val mem_res   = mem.d.fire
+    val mem_vld_q = Pin(Vec(P.ttwNum, Bool()))
+
+    for (i <- 0 until P.ttwNum) {
+      val mem_req_sel = mem_req && (mem.a.bits.source === i.U)
+      val mem_res_sel = mem_res && (mem.d.bits.source === i.U)
+
+      mem_vld_q(i) := RegEnable(mem_req_sel && !mem_res_sel,
+                                false.B,
+                                mem_req_sel ||  mem_res_sel)
+    }
+
+    val perfEvents = Seq(
+      ("ttw_req",         req),
+      ("ttw_req_inv",     req &&  inv),
+      ("ttw_req_inv_hit", req &&  inv &&  clr_any),
+      ("ttw_req_miss",    req && !inv && !hit_any),
+      ("ttw_mem_busy",    PopCount(mem_vld_q.asUInt)),
+    )
+
+    generatePerfEvent()
   }
 }

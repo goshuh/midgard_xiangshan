@@ -36,6 +36,8 @@ class DecodeStage(implicit p: Parameters) extends XSModule with HasPerfEvents {
     val csrCtrl = Input(new CustomCSRCtrlIO)
     // perf only
     val fusion = Vec(DecodeWidth - 1, Input(Bool()))
+
+    val redirect = Input(Valid(new Redirect))
   })
 
   val decoders = Seq.fill(DecodeWidth)(Module(new DecodeUnit))
@@ -63,6 +65,36 @@ class DecodeStage(implicit p: Parameters) extends XSModule with HasPerfEvents {
     io.fpRat(i)(3).addr := decoders(i).io.deq.cf_ctrl.ctrl.ldest
     io.fpRat(i).foreach(_.hold := !io.out(i).ready)
   }
+
+  // priv check
+  val priv_q    = Wire(Bool())
+  val priv_last = Wire(Vec (DecodeWidth, Bool()))
+
+  // coming from the last cycle. speculative execution also accounts
+  priv_last(0) := priv_q
+
+  for (i <- 1 until DecodeWidth) {
+    priv_last(i) := io.in(i - 1).bits.priv
+  }
+
+  for (i <- 0 until DecodeWidth) {
+    val priv_vio = io.in(i).valid     &&
+                   io.in(i).bits.priv && !priv_last(i) &&
+                  (io.in(i).bits.pc  =/=  X64Decode.UATG)
+
+    when (priv_vio) {
+      io.out(i).bits.cf.exceptionVec(ExceptionNO.illegalInstr) := true.B
+    }
+  }
+
+  val vld_vec  = Cat(io.in.map(_.valid).reverse)
+  val vld_last = vld_vec & ~(vld_vec >> 1)
+
+  priv_q := RegEnable(Mux(io.redirect.valid,
+                          io.redirect.bits.priv,
+                          Mux1H(vld_last, Cat(io.in.map(_.bits.priv).reverse))),
+                      true.B,
+                      io.redirect.valid || io.in.head.fire)
 
   val hasValid = VecInit(io.in.map(_.valid)).asUInt.orR
   XSPerfAccumulate("utilization", PopCount(io.in.map(_.valid)))

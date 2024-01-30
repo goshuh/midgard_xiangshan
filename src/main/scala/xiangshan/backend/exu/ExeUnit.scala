@@ -24,7 +24,7 @@ import chisel3.util._
 import utils._
 import xiangshan._
 import xiangshan.backend.fu.fpu.{FMA, FPUSubModule}
-import xiangshan.backend.fu.{CSR, FUWithRedirect, Fence, FenceToSbuffer}
+import xiangshan.backend.fu.{Alu, CSR, FUWithRedirect, Fence, FenceToSbuffer}
 
 class FenceIO(implicit p: Parameters) extends XSBundle {
   val sfence = Output(new SfenceBundle)
@@ -44,6 +44,14 @@ class ExeUnit(config: ExuConfig)(implicit p: Parameters) extends Exu(config) {
     require(hasRedirect.length <= 1)
     io.out.bits.redirectValid := hasRedirect.head.asInstanceOf[FUWithRedirect].redirectOutValid
     io.out.bits.redirect := hasRedirect.head.asInstanceOf[FUWithRedirect].redirectOut
+  }
+
+  if (config.fuConfigs.contains(aluCfg)) {
+    functionUnits.foreach {
+      _ match {
+        case a: Alu => a.uatc <> uatc.get
+      }
+    }
   }
 
   if (config.fuConfigs.contains(csrCfg)) {

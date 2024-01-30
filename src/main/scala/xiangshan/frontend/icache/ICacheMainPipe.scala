@@ -36,6 +36,7 @@ class ICacheMainPipeResp(implicit p: Parameters) extends ICacheBundle
   val vaddr    = UInt(VAddrBits.W)
   val readData = UInt(blockBits.W)
   val paddr    = UInt(PAddrBits.W)
+  val priv     = Bool()
   val tlbExcp  = new Bundle{
     val pageFault = Bool()
     val accessFault = Bool()
@@ -232,6 +233,8 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
   assert(RegNext(s1_valid || !Cat(tlb_already_recv).orR, true.B), "when !s1_valid, should not tlb_already_recv")
   assert(RegNext(s1_valid || !Cat(tlb_resp_valid).orR, true.B), "when !s1_valid, should not tlb_resp_valid")
 
+  val s1_priv = VecInit((0 until PortNumber).map(i => ResultHoldBypass(valid = tlb_back(i), data = fromITLB(i).bits.priv) && tlb_need_back(i)))
+
   val tlbRespPAddr = VecInit((0 until PortNumber).map(i => ResultHoldBypass(valid = tlb_back(i), data = fromITLB(i).bits.paddr)))
   val tlbExcpPF = VecInit((0 until PortNumber).map(i => ResultHoldBypass(valid = tlb_back(i), data = fromITLB(i).bits.excp.pf.instr) && tlb_need_back(i)))
   val tlbExcpAF = VecInit((0 until PortNumber).map(i => ResultHoldBypass(valid = tlb_back(i), data = fromITLB(i).bits.excp.af.instr) && tlb_need_back(i)))
@@ -383,6 +386,8 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
   val pmpExcpAF = Wire(Vec(PortNumber, Bool()))
   pmpExcpAF(0)  := fromPMP(0).instr && s2_tlb_need_back(0)
   pmpExcpAF(1)  := fromPMP(1).instr && s2_double_line && s2_tlb_need_back(1)
+
+  val s2_priv = RegEnable(s1_priv, s1_fire)
   //exception information
   val s2_except_pf = RegEnable(tlbExcpPF, s1_fire)
   val s2_except_af = VecInit(RegEnable(tlbExcpAF, s1_fire).zip(pmpExcpAF).map{
@@ -648,6 +653,7 @@ class ICacheMainPipe(implicit p: Parameters) extends ICacheModule
     toIFU(i).bits.readData  := s2_datas(i)
     toIFU(i).bits.paddr     := s2_req_paddr(i)
     toIFU(i).bits.vaddr     := s2_req_vaddr(i)
+    toIFU(i).bits.priv      := s2_priv(i)
     toIFU(i).bits.tlbExcp.pageFault     := s2_except_pf(i)
     toIFU(i).bits.tlbExcp.accessFault   := s2_except_af(i) || missSlot(i).m_corrupt
     toIFU(i).bits.tlbExcp.mmio          := s2_mmio

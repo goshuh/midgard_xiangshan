@@ -102,6 +102,7 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
     val store_req = Flipped(DecoupledIO(new DCacheLineReq))
     val store_replay_resp = ValidIO(new DCacheLineResp)
     val store_hit_resp = ValidIO(new DCacheLineResp)
+    val store_vtd_resp = ValidIO(new DCacheLineResp)
     val release_update = ValidIO(new ReleaseUpdate)
     // atmoics
     val atomic_req = Flipped(DecoupledIO(new MainPipeReq))
@@ -649,6 +650,10 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.store_hit_resp.bits.id := s3_req.id
   io.store_hit_resp.bits.err := false.B
 
+  io.store_vtd_resp.valid   := s2_valid && s2_req.isStore
+  io.store_vtd_resp.bits    := DontCare
+  io.store_vtd_resp.bits.id := s2_req.id
+
   io.release_update.valid := s3_valid && (s3_store_can_go || s3_amo_can_go) && s3_hit && update_data
   io.release_update.bits.addr := s3_req.addr
   io.release_update.bits.mask := Mux(s3_store_hit, s3_banked_store_wmask, banked_amo_wmask)
@@ -747,8 +752,8 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.wb.bits.delay_release := s3_req.replace
   io.wb.bits.miss_id := s3_req.miss_id
 
-  io.vtd.valid    := s3_valid && (s3_store_hit || s3_amo_hit)
-  io.vtd.bits.wnr := DontCare
+  io.vtd.valid    := RegNext(s2_fire_to_s3) && (s3_store_hit || s3_amo_hit)
+  io.vtd.bits.cmd := DontCare
   io.vtd.bits.mcn := s2_req.addr >> blockOffBits
   io.vtd.bits.vec := DontCare
 
