@@ -1,5 +1,7 @@
 package xiangshan.cache.mmu
 
+import  utils._
+
 import  chisel3._
 import  chisel3.util._
 import  midgard._
@@ -9,7 +11,6 @@ import  xiangshan._
 import  xiangshan.backend.fu._
 import  xiangshan.backend.fu.util._
 import  huancun._
-import  utils._
 
 import  chipsalliance.rocketchip.config._
 

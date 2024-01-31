@@ -1,5 +1,7 @@
 package xiangshan.cache.mmu
 
+import  utils._
+
 import  chisel3._
 import  chisel3.util._
 import  midgard._
