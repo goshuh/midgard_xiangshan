@@ -421,7 +421,7 @@ class DCacheIO(implicit p: Parameters) extends DCacheBundle {
   val tlb = Input(new TlbCsrBundle())
   val ise  = Output(Bool())
   val fsbc = new FSBCIO()
-  val vtd  = Decoupled(new frontside.VTDReq(mgFSParam))
+  val uat  = Decoupled(new frontside.UATReq(mgFSParam))
   val mshrFull = Output(Bool())
 }
 
@@ -499,7 +499,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   io.ise  := fsbc.io.ise
   io.fsbc <> fsbc.io.fsbc
 
-  io.vtd  <> mainPipe.io.vtd
+  io.uat  <> mainPipe.io.uat
 
   val errors = ldu.map(_.io.error) ++ // load error
     Seq(mainPipe.io.error) // store / misc error 
@@ -630,7 +630,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   missQueue.io.main_pipe_resp := RegNext(mainPipe.io.atomic_resp)
 
-  // user translation
+  // uat support
   val vtd_mask = ~0.U((PAddrBits - 26).W) ## io.tlb.uatc.tmask
   val vtd_base =  vtd_mask & (io.tlb.uatp.base << 6)
 

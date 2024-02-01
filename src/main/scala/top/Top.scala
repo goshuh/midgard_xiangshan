@@ -174,15 +174,15 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
       val all =  Cat(per).andR
 
       for ((c, i) <- core_with_l2.zipWithIndex) {
-        per(i) := l.module.io.vtd.valid &&
-                     (l.module.io.vtd.bits.vec(i) && c.module.io.vtd.ready ||
-                     !l.module.io.vtd.bits.vec(i))
+        per(i) := l.module.io.uat.valid &&
+                     (l.module.io.uat.bits.vec(i) && c.module.io.uat.ready ||
+                     !l.module.io.uat.bits.vec(i))
 
-        c.module.io.vtd.valid := l.module.io.vtd.bits.vec(i) && all
-        c.module.io.vtd.bits  := l.module.io.vtd.bits
+        c.module.io.uat.valid := l.module.io.uat.bits.vec(i) && all
+        c.module.io.uat.bits  := l.module.io.uat.bits
       }
 
-      l.module.io.vtd.ready := all
+      l.module.io.uat.ready := all
     })
 
     misc.module.debug_module_io.resetCtrl.hartIsInReset := core_with_l2.map(_.module.reset.asBool)

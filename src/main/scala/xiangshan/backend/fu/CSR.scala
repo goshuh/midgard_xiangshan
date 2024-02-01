@@ -435,7 +435,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val pmpMapping = pmp_gen_mapping(pmp_init, NumPMP, PmpcfgBase, PmpaddrBase, pmp)
   val pmaMapping = pmp_gen_mapping(pma_init, NumPMA, PmacfgBase, PmaaddrBase, pma)
 
-  // user translation
+  // uat support
   val ucid  = dontTouch(RegInit(0.U(64.W)))
   val ucsp  = dontTouch(RegInit(0.U(64.W)))
 
@@ -691,7 +691,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     MaskedRegMap(Smblockctl, smblockctl),
     MaskedRegMap(Srnctl, srnctl),
 
-    // user translation
+    // uat support
     MaskedRegMap(Ucid,   ucid),
     MaskedRegMap(Ucsp,   ucsp),
 

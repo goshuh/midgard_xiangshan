@@ -39,7 +39,7 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
     val csid_i = IO(                          Input(UInt(P.csidBits.W)))
 
     val vlb_i  = IO(Vec(P.ttwNum, Flipped(          new FSTWIO(P))))
-    val vtd_i  = IO(              Flipped(Decoupled(new frontside.VTDReq(P))))
+    val uat_i  = IO(              Flipped(Decoupled(new frontside.UATReq(P))))
 
 
     // --------------------------
@@ -56,7 +56,7 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
     u_ttw.asid_i      := asid_i
     u_ttw.csid_i      := csid_i
 
-    u_ttw.vtd_req_i   <> vtd_i
+    u_ttw.uat_req_i   <> uat_i
 
     // ad hoc, from the d-side
     u_ttw.kill_i      := vlb_i.last.kill_o
@@ -67,7 +67,7 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
       vlb_i(i).ttw_req_o <> u_ttw.vlb_req_i(i)
       vlb_i(i).ttw_res_i <> u_ttw.vlb_res_o(i)
       vlb_i(i).ttw_ext_i := u_ttw.vlb_ext_o(i)
-      vlb_i(i).vtd_req_i := u_ttw.vtd_req_o
+      vlb_i(i).uat_req_i := u_ttw.uat_req_o
     }
 
 

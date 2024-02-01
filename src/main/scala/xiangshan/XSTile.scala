@@ -141,7 +141,7 @@ class XSTile()(implicit p: Parameters) extends LazyModule
       val hartId = Input(UInt(64.W))
       val reset_vector = Input(UInt(PAddrBits.W))
       val cpu_halt = Output(Bool())
-      val vtd = Flipped(Decoupled(new frontside.VTDReq(mgFSParam)))
+      val uat = Flipped(Decoupled(new frontside.UATReq(mgFSParam)))
     })
 
     dontTouch(io.hartId)
@@ -158,7 +158,7 @@ class XSTile()(implicit p: Parameters) extends LazyModule
       core.module.io.perfEvents <> DontCare
     }
 
-    core.module.io.vtd <> io.vtd
+    core.module.io.uat <> io.uat
 
     misc.module.beu_errors.icache <> core.module.io.beu_errors.icache
     misc.module.beu_errors.dcache <> core.module.io.beu_errors.dcache

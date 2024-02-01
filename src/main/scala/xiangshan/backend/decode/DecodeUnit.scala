@@ -71,7 +71,7 @@ trait DecodeUnitConstants
  * Decode constants for RV64
  */
 object X64Decode extends DecodeConstants {
-  // user translations
+  // uat support
   val UATT = BitPat("b100000000000?????000?????0001011")
   val UATG = BitPat("b1000001??????????000?????0001011")
 

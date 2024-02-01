@@ -20,7 +20,7 @@ class FSTWIO(P: Param)(implicit p: Parameters) extends Bundle {
   val ttw_res_i   = Flipped(Valid(new frontside.VMA   (P)))
   val ttw_ext_i   =         Input(new frontside.TTWExt(P))
 
-  val vtd_req_i   =         Input(new frontside.VTDReq(P))
+  val uat_req_i   =         Input(new frontside.UATReq(P))
 
   val kill_o      =        Output(UInt(3.W))
   val kill_asid_o =        Output(UInt(P.asidBits.W))
@@ -83,7 +83,7 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
   u_vlb.kill_asid_i := sfence_i.bits.asid
   u_vlb.kill_csid_i := csr_i.ucid.ucid
 
-  u_vlb.vtd_req_i   := ttw_o.vtd_req_i
+  u_vlb.uat_req_i   := ttw_o.uat_req_i
   u_vlb.ttw_ext_i   := ttw_o.ttw_ext_i
 
   ttw_o.ttw_req_o   <> u_vlb.ttw_req_o

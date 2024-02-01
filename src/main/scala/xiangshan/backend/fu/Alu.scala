@@ -117,7 +117,7 @@ class MiscResultSelect(implicit p: Parameters) extends XSModule {
 
   val revRes = VecInit(Seq(io.revb, io.rev8, io.pack, io.orh48))(io.func(1, 0))
 
-  // user translation
+  // uat support
   val uat_idx_s = BSR(io.src, io.uatc.idx)(32.W) & io.uatc.imask
   val uat_vsc_s = BSR(io.src, io.uatc.vsc)( 5.W) & io.uatc.vmask
   val uat_top_s = BSR(io.src, io.uatc.tvi)(32.W)

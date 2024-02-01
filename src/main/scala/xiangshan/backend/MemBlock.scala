@@ -78,7 +78,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
     val otherFastWakeup = Vec(exuParameters.LduCnt + 2 * exuParameters.StuCnt, ValidIO(new MicroOp))
     val isec = new ISECIO()
     val fsbc = new FSBCIO()
-    val vtd  = Decoupled(new frontside.VTDReq(mgFSParam))
+    val uat  = Decoupled(new frontside.UATReq(mgFSParam))
     // misc
     val stIn = Vec(exuParameters.StuCnt, ValidIO(new ExuInput))
     val memoryViolation = ValidIO(new Redirect)
@@ -176,7 +176,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
 
   io.fsbc       <> dcache.io.fsbc
 
-  io.vtd        <> dcache.io.vtd
+  io.uat        <> dcache.io.uat
 
   sbuffer.io.isec.drain := RegNext(io.isec.expt || io.isec.drain, false.B)
   sbuffer.io.isec.valid := DontCare

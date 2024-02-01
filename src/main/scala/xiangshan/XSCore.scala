@@ -255,7 +255,7 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
     val l2_pf_enable = Output(Bool())
     val perfEvents = Input(Vec(numPCntHc * coreParams.L2NBanks, new PerfEvent))
     val beu_errors = Output(new XSL1BusErrors())
-    val vtd = Flipped(Decoupled(new frontside.VTDReq(mgFSParam)))
+    val uat = Flipped(Decoupled(new frontside.UATReq(mgFSParam)))
   })
 
   println(s"FPGAPlatform:${env.FPGAPlatform} EnableDebug:${env.EnableDebug}")
@@ -445,22 +445,22 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   ttw.vlb_i(0) <> frontend.io.ttw
   ttw.vlb_i(1) <> memBlock.io.ttw
 
-  val vtd_int  =  memBlock.io.vtd
-  val vtd_ext  =  io.vtd
+  val uat_int  =  memBlock.io.uat
+  val uat_ext  =  io.uat
 
-  val vtd_mask = ~0.U((PAddrBits - 26).W) ## csrioIn.tlb.uatc.tmask
-  val vtd_req  =  vtd_int.valid && csrioIn.tlb.uatp.en &&
-                      RegNext((vtd_mask &  vtd_int.bits.mcn) ===
-                              (vtd_mask & (csrioIn.tlb.uatp.base << 6)))
+  val uat_mask = ~0.U((PAddrBits - 26).W) ## csrioIn.tlb.uatc.tmask
+  val uat_req  =  uat_int.valid && csrioIn.tlb.uatp.en &&
+                      RegNext((uat_mask &  uat_int.bits.mcn) ===
+                              (uat_mask & (csrioIn.tlb.uatp.base << 6)))
 
-  ttw.vtd_i.valid := vtd_req || vtd_ext.valid
-  ttw.vtd_i.bits  := frontside.VTDReq(mgFSParam,
+  ttw.uat_i.valid := uat_req || uat_ext.valid
+  ttw.uat_i.bits  := frontside.UATReq(mgFSParam,
                                       2.U,
-                                      Mux(vtd_req, vtd_int.bits.mcn, vtd_ext.bits.mcn),
+                                      Mux(uat_req, uat_int.bits.mcn, uat_ext.bits.mcn),
                                       0.U)
 
-  vtd_int.ready   := ttw.vtd_i.ready
-  vtd_ext.ready   := ttw.vtd_i.ready && !vtd_req
+  uat_int.ready   := ttw.uat_i.ready
+  uat_ext.ready   := ttw.uat_i.ready && !uat_req
 
   // if l2 prefetcher use stream prefetch, it should be placed in XSCore
   io.l2_pf_enable := csrioIn.customCtrl.l2_pf_enable
