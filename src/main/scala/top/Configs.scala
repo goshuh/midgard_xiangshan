@@ -61,7 +61,9 @@ class MinimalConfig(n: Int = 1) extends Config(
         IssQueSize = 8,
         NRPhyRegs = 64,
         LoadQueueSize = 16,
+        LoadQueueNWriteBanks = 4,
         StoreQueueSize = 12,
+        StoreQueueNWriteBanks = 4,
         RobSize = 32,
         FtqSize = 8,
         IBufSize = 16,
@@ -86,6 +88,7 @@ class MinimalConfig(n: Int = 1) extends Config(
           LduCnt = 2,
           StuCnt = 2
         ),
+        prefetcher = None,
         icacheParameters = ICacheParameters(
           nSets = 64, // 16KB ICache
           tagECC = Some("parity"),
@@ -113,34 +116,35 @@ class MinimalConfig(n: Int = 1) extends Config(
           name = "itlb",
           fetchi = true,
           useDmode = false,
+          sameCycle = false,
+          missSameCycle = true,
           normalReplacer = Some("plru"),
           superReplacer = Some("plru"),
           normalNWays = 4,
           normalNSets = 1,
-          superNWays = 2
+          superNWays = 2,
+          shouldBlock = true
         ),
         ldtlbParameters = TLBParameters(
           name = "ldtlb",
-          normalNSets = 4, // when da or sa
+          normalNSets = 16, // 6when da or sa
           normalNWays = 1, // when fa or sa
           normalAssociative = "sa",
           normalReplacer = Some("setplru"),
           superNWays = 4,
           normalAsVictim = true,
           partialStaticPMP = true,
-          outsideRecvFlush = true,
           outReplace = false
         ),
         sttlbParameters = TLBParameters(
           name = "sttlb",
-          normalNSets = 4, // when da or sa
+          normalNSets = 16, // when da or sa
           normalNWays = 1, // when fa or sa
           normalAssociative = "sa",
           normalReplacer = Some("setplru"),
           normalAsVictim = true,
           superNWays = 4,
           partialStaticPMP = true,
-          outsideRecvFlush = true,
           outReplace = false
         ),
         btlbParameters = TLBParameters(
@@ -160,13 +164,25 @@ class MinimalConfig(n: Int = 1) extends Config(
         L2CacheParamsOpt = None // remove L2 Cache
       )
     )
-    case SoCParamsKey => up(SoCParamsKey).copy(
-      L3CacheParamsOpt = Some(up(SoCParamsKey).L3CacheParamsOpt.get.copy(
-        sets = 1024,
-        simulation = true
-      )),
-      L3NBanks = 1
-    )
+    case SoCParamsKey =>
+      val tiles = site(XSTileKey)
+      up(SoCParamsKey).copy(
+        L3CacheParamsOpt = Some(up(SoCParamsKey).L3CacheParamsOpt.get.copy(
+          sets = 1024,
+          inclusive = false,
+          clientCaches = tiles.map{ p =>
+            CacheParameters(
+              "dcache",
+              sets = 2 * p.dcacheParametersOpt.get.nSets,
+              ways = p.dcacheParametersOpt.get.nWays + 2,
+              blockGranularity = log2Ceil(2 * p.dcacheParametersOpt.get.nSets),
+              aliasBitsOpt = None
+            )
+          },
+          simulation = !site(DebugOptionsKey).FPGAPlatform
+        )),
+        L3NBanks = 1
+      )
   })
 )
 
@@ -183,7 +199,7 @@ class MinimalSimConfig(n: Int = 1) extends Config(
   })
 )
 
-class WithNKBL1D(n: Int, ways: Int = 8) extends Config((site, here, up) => {
+class WithNKBL1D(n: Int, ways: Int = 4) extends Config((site, here, up) => {
   case XSTileKey =>
     val sets = n * 1024 / ways / 64
     up(XSTileKey).map(_.copy(
@@ -223,15 +239,16 @@ class WithNKBL2
           "dcache",
           sets = 2 * p.dcacheParametersOpt.get.nSets / banks,
           ways = p.dcacheParametersOpt.get.nWays + 2,
+          blockGranularity = log2Ceil(2 * p.dcacheParametersOpt.get.nSets / banks),
           aliasBitsOpt = p.dcacheParametersOpt.get.aliasBitsOpt
         )),
         reqField = Seq(PreferCacheField()),
         echoField = Seq(DirtyField()),
-        prefetch = Some(huancun.prefetch.BOPParameters()),
+        prefetch = Some(huancun.prefetch.PrefetchReceiverParams()),
         enablePerf = true,
         sramDepthDiv = 2,
-        tagECC = Some("secded"),
-        dataECC = Some("secded"),
+        tagECC = None,
+        dataECC = None,
         simulation = !site(DebugOptionsKey).FPGAPlatform
       )),
       L2NBanks = banks
@@ -255,7 +272,10 @@ class WithNKBL3(n: Int, ways: Int = 8, inclusive: Boolean = true, banks: Int = 1
         inclusive = inclusive,
         clientCaches = tiles.map{ core =>
           val l2params = core.L2CacheParamsOpt.get.toCacheParams
-          l2params.copy(sets = 2 * clientDirBytes / core.L2NBanks / l2params.ways / 64)
+          l2params.copy(
+            sets = 2 * clientDirBytes / core.L2NBanks / l2params.ways / 64,
+            blockGranularity = log2Ceil(clientDirBytes / core.L2NBanks / l2params.ways / 64 / tiles.size)
+          )
         },
         enablePerf = true,
         ctrl = Some(CacheCtrl(
@@ -264,8 +284,8 @@ class WithNKBL3(n: Int, ways: Int = 8, inclusive: Boolean = true, banks: Int = 1
         )),
         sramClkDivBy2 = true,
         sramDepthDiv = 4,
-        tagECC = Some("secded"),
-        dataECC = Some("secded"),
+        tagECC = None,
+        dataECC = None,
         simulation = !site(DebugOptionsKey).FPGAPlatform
       ))
     )
@@ -283,13 +303,6 @@ class DefaultL3DebugConfig(n: Int = 1) extends Config(
   new WithL3DebugConfig ++ new BaseConfig(n)
 )
 
-class MinimalAliasDebugConfig(n: Int = 1) extends Config(
-  new WithNKBL3(512, inclusive = false) ++
-    new WithNKBL2(256, inclusive = false, alwaysReleaseData = true) ++
-    new WithNKBL1D(128) ++
-    new MinimalConfig(n)
-)
-
 class MediumConfig(n: Int = 1) extends Config(
   new WithNKBL3(4096, inclusive = false, banks = 4)
     ++ new WithNKBL2(512, inclusive = false, alwaysReleaseData = true)
@@ -300,6 +313,6 @@ class MediumConfig(n: Int = 1) extends Config(
 class DefaultConfig(n: Int = 1) extends Config(
   new WithNKBL3(6 * 1024, inclusive = false, banks = 4, ways = 6)
     ++ new WithNKBL2(2 * 512, inclusive = false, banks = 4, alwaysReleaseData = true)
-    ++ new WithNKBL1D(128)
+    ++ new WithNKBL1D(64)
     ++ new BaseConfig(n)
 )

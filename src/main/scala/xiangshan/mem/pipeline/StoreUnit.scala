@@ -50,8 +50,7 @@ class StoreUnit_S0(implicit p: Parameters) extends XSModule {
   io.dtlbReq.valid := io.in.valid
   io.dtlbReq.bits.cmd := TlbCmd.write
   io.dtlbReq.bits.size := LSUOpType.size(io.in.bits.uop.ctrl.fuOpType)
-  io.dtlbReq.bits.kill := DontCare
-  io.dtlbReq.bits.debug.robIdx := io.in.bits.uop.robIdx
+  io.dtlbReq.bits.robIdx := io.in.bits.uop.robIdx
   io.dtlbReq.bits.debug.pc := io.in.bits.uop.cf.pc
   io.dtlbReq.bits.debug.isFirstIssue := io.isFirstIssue
 
@@ -95,7 +94,7 @@ class StoreUnit_S1(implicit p: Parameters) extends XSModule {
     val in = Flipped(Decoupled(new LsPipelineBundle))
     val out = Decoupled(new LsPipelineBundle)
     val lsq = ValidIO(new LsPipelineBundle())
-    val dtlbResp = Flipped(DecoupledIO(new TlbResp))
+    val dtlbResp = Flipped(DecoupledIO(new TlbResp()))
     val rsFeedback = ValidIO(new RSFeedback)
   })
 
@@ -104,7 +103,7 @@ class StoreUnit_S1(implicit p: Parameters) extends XSModule {
     io.in.bits.uop.ctrl.fuOpType === LSUOpType.cbo_flush ||
     io.in.bits.uop.ctrl.fuOpType === LSUOpType.cbo_inval
 
-  val s1_paddr = io.dtlbResp.bits.paddr
+  val s1_paddr = io.dtlbResp.bits.paddr(0)
   val s1_tlb_miss = io.dtlbResp.bits.miss
   val s1_mmio = is_mmio_cbo
   val s1_exception = ExceptionNO.selectByFu(io.out.bits.uop.cf.exceptionVec, staCfg).asUInt.orR
@@ -135,13 +134,10 @@ class StoreUnit_S1(implicit p: Parameters) extends XSModule {
   io.out.bits.miss := false.B
   io.out.bits.mmio := s1_mmio
 
-  /* GOSH
   val priv_chk = io.dtlbResp.bits.priv && !io.in.bits.uop.cf.priv
-  */
-  val priv_chk = false.B
 
-  io.out.bits.uop.cf.exceptionVec(storePageFault) := io.dtlbResp.bits.excp.pf.st
-  io.out.bits.uop.cf.exceptionVec(storeAccessFault) := io.dtlbResp.bits.excp.af.st || priv_chk
+  io.out.bits.uop.cf.exceptionVec(storePageFault) := io.dtlbResp.bits.excp(0).pf.st
+  io.out.bits.uop.cf.exceptionVec(storeAccessFault) := io.dtlbResp.bits.excp(0).af.st || priv_chk
 
   io.lsq.valid := io.in.valid
   io.lsq.bits := io.out.bits
@@ -215,6 +211,8 @@ class StoreUnit(implicit p: Parameters) extends XSModule {
     val lsq = ValidIO(new LsPipelineBundle)
     val lsq_replenish = Output(new LsPipelineBundle())
     val stout = DecoupledIO(new ExuOutput) // writeback store
+    // store mask, send to sq in store_s0
+    val storeMaskOut = Valid(new StoreMaskBundle)
   })
 
   val store_s0 = Module(new StoreUnit_S0)
@@ -227,6 +225,10 @@ class StoreUnit(implicit p: Parameters) extends XSModule {
   io.tlb.req_kill := false.B
   store_s0.io.rsIdx := io.rsIdx
   store_s0.io.isFirstIssue := io.isFirstIssue
+
+  io.storeMaskOut.valid := store_s0.io.in.valid
+  io.storeMaskOut.bits.mask := store_s0.io.out.bits.mask
+  io.storeMaskOut.bits.sqIdx := store_s0.io.out.bits.uop.sqIdx
 
   PipelineConnect(store_s0.io.out, store_s1.io.in, true.B, store_s0.io.out.bits.uop.robIdx.needFlush(io.redirect))
 

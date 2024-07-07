@@ -23,6 +23,9 @@ import chisel3.util._
 import utils._
 import xiangshan._
 
+import scala.{Tuple2 => &}
+
+
 class RASEntry()(implicit p: Parameters) extends XSBundle {
     val retAddr = UInt(VAddrBits.W)
     val ctr = UInt(8.W) // layer of nested call functions
@@ -54,7 +57,7 @@ class RAS(implicit p: Parameters) extends BasePredictor {
       val recover_new_addr = Input(UInt(VAddrBits.W))
 
       val sp = Output(UInt(log2Up(rasSize).W))
-      val top = Output(new RASEntry)
+      val top = Output(Vec(numDup, new RASEntry))
     })
 
     val debugIO = IO(new Bundle{
@@ -69,13 +72,18 @@ class RAS(implicit p: Parameters) extends BasePredictor {
 
     val stack = Mem(RasSize, new RASEntry)
     val sp = RegInit(0.U(log2Up(rasSize).W))
-    val top = RegInit(RASEntry(0x80000000L.U, 0.U))
     val topPtr = RegInit(0.U(log2Up(rasSize).W))
+    
+    val top_write_en = WireInit(false.B)
+    val top_write = Wire(new RASEntry)
+    val top_dup = RegEnable(dup(top_write), init=dup(RASEntry(0x80000000L.U, 0.U)), top_write_en)
+    top_write := top_dup(0)
+    top_dup.foreach(dontTouch(_))
     
     val wen = WireInit(false.B)
     val write_bypass_entry = Reg(new RASEntry())
-    val write_bypass_ptr = Reg(UInt(log2Up(rasSize).W))
-    val write_bypass_valid = Reg(Bool())
+    val write_bypass_ptr = RegInit(0.U(log2Up(rasSize).W))
+    val write_bypass_valid = RegInit(false.B)
     when (wen) {
       write_bypass_valid := true.B
     }.elsewhen (write_bypass_valid) {
@@ -89,7 +97,7 @@ class RAS(implicit p: Parameters) extends BasePredictor {
     def ptrInc(ptr: UInt) = Mux(ptr === (rasSize-1).U, 0.U, ptr + 1.U)
     def ptrDec(ptr: UInt) = Mux(ptr === 0.U, (rasSize-1).U, ptr - 1.U)
 
-    val spec_alloc_new = io.spec_new_addr =/= top.retAddr || top.ctr.andR
+    val spec_alloc_new = io.spec_new_addr =/= top_dup(0).retAddr || top_dup(0).ctr.andR
     val recover_alloc_new = io.recover_new_addr =/= io.recover_top.retAddr || io.recover_top.ctr.andR
 
     // TODO: fix overflow and underflow bugs
@@ -100,8 +108,9 @@ class RAS(implicit p: Parameters) extends BasePredictor {
         when (do_alloc_new) {
           sp     := ptrInc(do_sp)
           topPtr := do_sp
-          top.retAddr := do_new_addr
-          top.ctr := 0.U
+          top_write_en := true.B
+          top_write.retAddr := do_new_addr
+          top_write.ctr := 0.U
           // write bypass
           wen := true.B
           write_bypass_entry := RASEntry(do_new_addr, 0.U)
@@ -110,9 +119,10 @@ class RAS(implicit p: Parameters) extends BasePredictor {
           when (recover) {
             sp := do_sp
             topPtr := do_top_ptr
-            top.retAddr := do_top.retAddr
+            top_write.retAddr := do_top.retAddr
           }
-          top.ctr := do_top.ctr + 1.U
+          top_write.ctr := do_top.ctr + 1.U
+          top_write_en := true.B
           // write bypass
           wen := true.B
           write_bypass_entry := RASEntry(do_new_addr, do_top.ctr + 1.U)
@@ -123,18 +133,20 @@ class RAS(implicit p: Parameters) extends BasePredictor {
           sp     := ptrDec(do_sp)
           topPtr := ptrDec(do_top_ptr)
           // read bypass
-          top :=
+          top_write :=
             Mux(ptrDec(do_top_ptr) === write_bypass_ptr && write_bypass_valid,
               write_bypass_entry,
               stack.read(ptrDec(do_top_ptr))
             )
+          top_write_en := true.B
         }.otherwise {
           when (recover) {
             sp := do_sp
             topPtr := do_top_ptr
-            top.retAddr := do_top.retAddr
+            top_write.retAddr := do_top.retAddr
           }
-          top.ctr := do_top.ctr - 1.U
+          top_write.ctr := do_top.ctr - 1.U
+          top_write_en := true.B
           // write bypass
           wen := true.B
           write_bypass_entry := RASEntry(do_top.retAddr, do_top.ctr - 1.U)
@@ -144,7 +156,8 @@ class RAS(implicit p: Parameters) extends BasePredictor {
         when (recover) {
           sp := do_sp
           topPtr := do_top_ptr
-          top := do_top
+          top_write := do_top
+          top_write_en := true.B
           // write bypass
           wen := true.B
           write_bypass_entry := do_top
@@ -161,10 +174,10 @@ class RAS(implicit p: Parameters) extends BasePredictor {
       Mux(io.recover_valid, io.recover_sp,       sp),
       Mux(io.recover_valid, io.recover_sp - 1.U, topPtr),
       Mux(io.recover_valid, io.recover_new_addr, io.spec_new_addr),
-      Mux(io.recover_valid, io.recover_top,      top))
+      Mux(io.recover_valid, io.recover_top,      top_dup(0)))
       
     io.sp := sp
-    io.top := top
+    io.top := top_dup
     
     val resetIdx = RegInit(0.U(log2Ceil(RasSize).W))
     val do_reset = RegInit(true.B)
@@ -176,12 +189,12 @@ class RAS(implicit p: Parameters) extends BasePredictor {
       do_reset := false.B
     }
 
-    debugIO.spec_push_entry := RASEntry(io.spec_new_addr, Mux(spec_alloc_new, 1.U, top.ctr + 1.U))
+    debugIO.spec_push_entry := RASEntry(io.spec_new_addr, Mux(spec_alloc_new, 1.U, top_dup(0).ctr + 1.U))
     debugIO.spec_alloc_new := spec_alloc_new
     debugIO.recover_push_entry := RASEntry(io.recover_new_addr, Mux(recover_alloc_new, 1.U, io.recover_top.ctr + 1.U))
     debugIO.recover_alloc_new := recover_alloc_new
     debugIO.sp := sp
-    debugIO.topRegister := top
+    debugIO.topRegister := top_dup(0)
     for (i <- 0 until RasSize) {
         debugIO.out_mem(i) := Mux(i.U === write_bypass_ptr && write_bypass_valid, write_bypass_entry, stack.read(i.U))
     }
@@ -189,58 +202,74 @@ class RAS(implicit p: Parameters) extends BasePredictor {
 
   val spec = Module(new RASStack(RasSize))
   val spec_ras = spec.io
-  val spec_top_addr = spec_ras.top.retAddr
+  val spec_top_addr_dup = spec_ras.top.map(_.retAddr)
 
 
   val s2_spec_push = WireInit(false.B)
   val s2_spec_pop = WireInit(false.B)
   val s2_full_pred = io.in.bits.resp_in(0).s2.full_pred
   // when last inst is an rvi call, fall through address would be set to the middle of it, so an addition is needed
-  val s2_spec_new_addr = s2_full_pred.fallThroughAddr + Mux(s2_full_pred.last_may_be_rvi_call, 2.U, 0.U)
+  val s2_spec_new_addr = s2_full_pred(dupForRas).fallThroughAddr + Mux(s2_full_pred(dupForRas).last_may_be_rvi_call, 2.U, 0.U)
   spec_ras.push_valid := s2_spec_push
   spec_ras.pop_valid  := s2_spec_pop
   spec_ras.spec_new_addr := s2_spec_new_addr
 
   // confirm that the call/ret is the taken cfi
-  s2_spec_push := io.s2_fire && s2_full_pred.hit_taken_on_call && !io.s3_redirect
-  s2_spec_pop  := io.s2_fire && s2_full_pred.hit_taken_on_ret  && !io.s3_redirect
+  s2_spec_push := io.s2_fire(dupForRas) && s2_full_pred(dupForRas).hit_taken_on_call && !io.s3_redirect(dupForRas)
+  s2_spec_pop  := io.s2_fire(dupForRas) && s2_full_pred(dupForRas).hit_taken_on_ret  && !io.s3_redirect(dupForRas)
 
-  val s2_jalr_target = io.out.resp.s2.full_pred.jalr_target
-  val s2_last_target_in = s2_full_pred.targets.last
-  val s2_last_target_out = io.out.resp.s2.full_pred.targets.last
-  val s2_is_jalr = s2_full_pred.is_jalr
-  val s2_is_ret = s2_full_pred.is_ret
+  val s2_jalr_target_dup = io.out.s2.full_pred.map(_.jalr_target)
+  val s2_last_target_in_dup = s2_full_pred.map(_.targets.last)
+  val s2_last_target_out_dup = io.out.s2.full_pred.map(_.targets.last)
+  val s2_is_jalr_dup = s2_full_pred.map(_.is_jalr)
+  val s2_is_ret_dup = s2_full_pred.map(_.is_ret)
   // assert(is_jalr && is_ret || !is_ret)
-  when(s2_is_ret && io.ctrl.ras_enable) {
-    s2_jalr_target := spec_top_addr
-    // FIXME: should use s1 globally
-  }
-  s2_last_target_out := Mux(s2_is_jalr, s2_jalr_target, s2_last_target_in)
+  val ras_enable_dup = RegNext(dup(io.ctrl.ras_enable))
+  for (ras_enable & s2_is_ret & s2_jalr_target & spec_top_addr <-
+    ras_enable_dup zip s2_is_ret_dup zip s2_jalr_target_dup zip spec_top_addr_dup) {
+      when(s2_is_ret && ras_enable) {
+        s2_jalr_target := spec_top_addr
+        // FIXME: should use s1 globally
+      }
+      dontTouch(ras_enable)
+    }
+  for (s2_lto & s2_is_jalr & s2_jalr_target & s2_lti <-
+    s2_last_target_out_dup zip s2_is_jalr_dup zip s2_jalr_target_dup zip s2_last_target_in_dup) {
+      s2_lto := Mux(s2_is_jalr, s2_jalr_target, s2_lti)
+    }
   
-  val s3_top = RegEnable(spec_ras.top, io.s2_fire)
-  val s3_sp = RegEnable(spec_ras.sp, io.s2_fire)
-  val s3_spec_new_addr = RegEnable(s2_spec_new_addr, io.s2_fire)
+  val s3_top_dup = io.s2_fire.zip(spec_ras.top).map {case (f, t) => RegEnable(t, f)}
+  val s3_sp = RegEnable(spec_ras.sp, io.s2_fire(dupForRas))
+  val s3_spec_new_addr = RegEnable(s2_spec_new_addr, io.s2_fire(dupForRas))
 
-  val s3_jalr_target = io.out.resp.s3.full_pred.jalr_target
-  val s3_last_target_in = io.in.bits.resp_in(0).s3.full_pred.targets.last
-  val s3_last_target_out = io.out.resp.s3.full_pred.targets.last
-  val s3_is_jalr = io.in.bits.resp_in(0).s3.full_pred.is_jalr
-  val s3_is_ret = io.in.bits.resp_in(0).s3.full_pred.is_ret
+  val s3_full_pred = io.in.bits.resp_in(0).s3.full_pred
+  val s3_jalr_target_dup = io.out.s3.full_pred.map(_.jalr_target)
+  val s3_last_target_in_dup = s3_full_pred.map(_.targets.last)
+  val s3_last_target_out_dup = io.out.s3.full_pred.map(_.targets.last)
+  val s3_is_jalr_dup = s3_full_pred.map(_.is_jalr)
+  val s3_is_ret_dup = s3_full_pred.map(_.is_ret)
   // assert(is_jalr && is_ret || !is_ret)
-  when(s3_is_ret && io.ctrl.ras_enable) {
-    s3_jalr_target := s3_top.retAddr
-    // FIXME: should use s1 globally
-  }
-  s3_last_target_out := Mux(s3_is_jalr, s3_jalr_target, s3_last_target_in)
 
-  val s3_pushed_in_s2 = RegEnable(s2_spec_push, io.s2_fire)
-  val s3_popped_in_s2 = RegEnable(s2_spec_pop,  io.s2_fire)
-  val s3_push = io.in.bits.resp_in(0).s3.full_pred.hit_taken_on_call
-  val s3_pop  = io.in.bits.resp_in(0).s3.full_pred.hit_taken_on_ret
+  for (ras_enable & s3_is_ret & s3_jalr_target & s3_top <-
+    ras_enable_dup zip s3_is_ret_dup zip s3_jalr_target_dup zip s3_top_dup) {
+      when(s3_is_ret && ras_enable) {
+        s3_jalr_target := s3_top.retAddr
+        // FIXME: should use s1 globally
+      }
+    }
+  for (s3_lto & s3_is_jalr & s3_jalr_target & s3_lti <-
+    s3_last_target_out_dup zip s3_is_jalr_dup zip s3_jalr_target_dup zip s3_last_target_in_dup) {
+      s3_lto := Mux(s3_is_jalr, s3_jalr_target, s3_lti)
+    }
 
-  val s3_recover = io.s3_fire && (s3_pushed_in_s2 =/= s3_push || s3_popped_in_s2 =/= s3_pop)
-  io.out.resp.s3.rasSp  := s3_sp
-  io.out.resp.s3.rasTop := s3_top
+  val s3_pushed_in_s2 = RegEnable(s2_spec_push, io.s2_fire(dupForRas))
+  val s3_popped_in_s2 = RegEnable(s2_spec_pop,  io.s2_fire(dupForRas))
+  val s3_push = io.in.bits.resp_in(0).s3.full_pred(dupForRas).hit_taken_on_call
+  val s3_pop  = io.in.bits.resp_in(0).s3.full_pred(dupForRas).hit_taken_on_ret
+
+  val s3_recover = io.s3_fire(dupForRas) && (s3_pushed_in_s2 =/= s3_push || s3_popped_in_s2 =/= s3_pop)
+  io.out.last_stage_spec_info.rasSp  := s3_sp
+  io.out.last_stage_spec_info.rasTop := s3_top_dup(dupForRas)
 
 
   val redirect = RegNext(io.redirect)
@@ -256,7 +285,7 @@ class RAS(implicit p: Parameters) extends BasePredictor {
   spec_ras.recover_pop  := Mux(redirect.valid, retMissPred, s3_pop)
 
   spec_ras.recover_sp  := Mux(redirect.valid, recover_cfi.rasSp, s3_sp)
-  spec_ras.recover_top := Mux(redirect.valid, recover_cfi.rasEntry, s3_top)
+  spec_ras.recover_top := Mux(redirect.valid, recover_cfi.rasEntry, s3_top_dup(dupForRas))
   spec_ras.recover_new_addr := Mux(redirect.valid, recover_cfi.pc + Mux(recover_cfi.pd.isRVC, 2.U, 4.U), s3_spec_new_addr)
 
 
@@ -277,11 +306,11 @@ class RAS(implicit p: Parameters) extends BasePredictor {
   }
   XSDebug(s2_spec_push, "s2_spec_push  inAddr: 0x%x  inCtr: %d |  allocNewEntry:%d |   sp:%d \n",
   s2_spec_new_addr,spec_debug.spec_push_entry.ctr,spec_debug.spec_alloc_new,spec_debug.sp.asUInt)
-  XSDebug(s2_spec_pop, "s2_spec_pop  outAddr: 0x%x \n",io.out.resp.s2.getTarget)
+  XSDebug(s2_spec_pop, "s2_spec_pop  outAddr: 0x%x \n",io.out.s2.target(dupForRas))
   val s3_recover_entry = spec_debug.recover_push_entry
   XSDebug(s3_recover && s3_push, "s3_recover_push  inAddr: 0x%x  inCtr: %d |  allocNewEntry:%d |   sp:%d \n",
     s3_recover_entry.retAddr, s3_recover_entry.ctr, spec_debug.recover_alloc_new, s3_sp.asUInt)
-  XSDebug(s3_recover && s3_pop, "s3_recover_pop  outAddr: 0x%x \n",io.out.resp.s3.getTarget)
+  XSDebug(s3_recover && s3_pop, "s3_recover_pop  outAddr: 0x%x \n",io.out.s3.target(dupForRas))
   val redirectUpdate = redirect.bits.cfiUpdate
   XSDebug(do_recover && callMissPred, "redirect_recover_push\n")
   XSDebug(do_recover && retMissPred, "redirect_recover_pop\n")

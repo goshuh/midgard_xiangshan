@@ -21,13 +21,78 @@ import chisel3._
 import chisel3.experimental.chiselName
 import chisel3.util._
 import utils._
-import freechips.rocketchip.formal.PropertyClass
 
 import scala.math.min
 
+class BankedAsyncDataModuleTemplateWithDup[T <: Data](
+  gen: T,
+  numEntries: Int,
+  numRead: Int,
+  numDup: Int,
+  numBanks: Int
+) extends Module {
+  val io = IO(new Bundle {
+    val raddr = Vec(numRead, Input(UInt(log2Ceil(numEntries).W)))
+    val rdata = Vec(numRead, Vec(numDup, Output(gen)))
+    val wen   = Input(Bool())
+    val waddr = Input(UInt(log2Ceil(numEntries).W))
+    val wdata = Input(gen)
+  })
+  require(numBanks > 1)
+  require(numEntries > numBanks)
+
+  val numBankEntries = numEntries / numBanks
+  def bankOffset(address: UInt): UInt = {
+    address(log2Ceil(numBankEntries) - 1, 0)
+  }
+
+  def bankIndex(address: UInt): UInt = {
+    address(log2Ceil(numEntries) - 1, log2Ceil(numBankEntries))
+  }
+
+  val dataBanks = Seq.tabulate(numBanks)(i => {
+    val bankEntries = if (i < numBanks - 1) numBankEntries else (numEntries - (i * numBankEntries))
+    Mem(bankEntries, gen)
+  })
+
+  // delay one cycle for write, so there will be one inflight entry.
+  // The inflight entry is transparent('already writen') for outside
+  val last_wen = RegNext(io.wen, false.B)
+  val last_waddr = RegEnable(io.waddr, io.wen)
+  val last_wdata_dup = RegEnable(io.wdata, io.wen)
+
+  // async read, but regnext
+  for (i <- 0 until numRead) {
+    val data_read_dup = Reg(Vec(numDup, Vec(numBanks, gen)))
+    val bank_index_dup = Reg(Vec(numDup, UInt(numBanks.W)))
+    val w_bypassed_dup = Seq.fill(numDup)(RegNext(io.waddr === io.raddr(i) && io.wen))
+    val w_bypassed2_dup = Seq.fill(numDup)(RegNext(last_waddr === io.raddr(i) && last_wen))
+    val last_wdata_dup = Seq.fill(numDup)(RegEnable(io.wdata, io.wen))
+    val last_wdata2_dup = Seq.fill(numDup)(RegEnable(last_wdata_dup.head, last_wen))
+    for (j <- 0 until numDup) {
+      bank_index_dup(j) := UIntToOH(bankIndex(io.raddr(i)))
+      for (k <- 0 until numBanks) {
+        data_read_dup(j)(k) := dataBanks(k)(bankOffset(io.raddr(i)))
+      }
+    }
+    // next cycle
+    for (j <- 0 until numDup) {
+      io.rdata(i)(j) := Mux(w_bypassed_dup(j) || w_bypassed2_dup(j), Mux(w_bypassed2_dup(j), last_wdata2_dup(j), last_wdata_dup(j)),
+        Mux1H(bank_index_dup(j), data_read_dup(j)))
+    }
+  }
+
+  // write
+  for (i <- 0 until numBanks) {
+    when (last_wen && (bankIndex(last_waddr) === i.U)) {
+      dataBanks(i)(bankOffset(last_waddr)) := last_wdata_dup
+    }
+  }
+}
+
 @chiselName
 class TLBFA(
-  parentName: String,
+  sameCycle: Boolean,
   ports: Int,
   nSets: Int,
   nWays: Int,
@@ -35,6 +100,7 @@ class TLBFA(
   normalPage: Boolean,
   superPage: Boolean
 )(implicit p: Parameters) extends TlbModule with HasPerfEvents {
+  require(!(sameCycle && saveLevel))
 
   val io = IO(new TlbStorageIO(nSets, nWays, ports))
   io.r.req.map(_.ready := true.B)
@@ -43,32 +109,36 @@ class TLBFA(
   val entries = Reg(Vec(nWays, new TlbEntry(normalPage, superPage)))
   val g = entries.map(_.perm.g)
 
+  val isSuperPage = Wire(Vec(ports, Bool()))
+
   for (i <- 0 until ports) {
     val req = io.r.req(i)
     val resp = io.r.resp(i)
     val access = io.access(i)
 
     val vpn = req.bits.vpn
-    val vpn_reg = RegEnable(vpn, req.fire())
-    val vpn_gen_ppn = if(saveLevel) vpn else vpn_reg
+    val vpn_reg = if (sameCycle) vpn else RegEnable(vpn, req.fire())
+    val vpn_gen_ppn = if(sameCycle || saveLevel) vpn else vpn_reg
 
-    val refill_mask = Mux(io.w.valid, UIntToOH(io.w.bits.wayIdx), 0.U(nWays.W))
+    val refill_mask = if (sameCycle) 0.U(nWays.W) else Mux(io.w.valid, UIntToOH(io.w.bits.wayIdx), 0.U(nWays.W))
     val hitVec = VecInit((entries.zipWithIndex).zip(v zip refill_mask.asBools).map{case (e, m) => e._1.hit(vpn, io.csr.satp.asid) && m._1 && !m._2 })
 
     hitVec.suggestName("hitVec")
 
-    val hitVecReg = RegEnable(hitVec, req.fire())
-    assert(!resp.valid || (PopCount(hitVecReg) === 0.U || PopCount(hitVecReg) === 1.U), s"${parentName} fa port${i} multi-hit")
+    val hitVecReg = if (sameCycle) hitVec else RegEnable(hitVec, req.fire())
 
-    resp.valid := RegNext(req.valid)
+    resp.valid := { if (sameCycle) req.valid else RegNext(req.valid) }
     resp.bits.hit := Cat(hitVecReg).orR
     if (nWays == 1) {
-      resp.bits.ppn := entries(0).genPPN(saveLevel, req.valid)(vpn_gen_ppn)
-      resp.bits.perm := entries(0).perm
+      resp.bits.ppn(0) := entries(0).genPPN(saveLevel, req.valid)(vpn_gen_ppn)
+      resp.bits.perm(0) := entries(0).perm
+      isSuperPage(i) := entries(0).isSuperPage()
     } else {
-      resp.bits.ppn := ParallelMux(hitVecReg zip entries.map(_.genPPN(saveLevel, req.valid)(vpn_gen_ppn)))
-      resp.bits.perm := ParallelMux(hitVecReg zip entries.map(_.perm))
+      resp.bits.ppn(0) := ParallelMux(hitVecReg zip entries.map(_.genPPN(saveLevel, req.valid)(vpn_gen_ppn)))
+      resp.bits.perm(0) := ParallelMux(hitVecReg zip entries.map(_.perm))
+      isSuperPage(i) := ParallelMux(hitVecReg zip entries.map(_.isSuperPage()))
     }
+    io.r.resp_hit_sameCycle(i) := Cat(hitVec).orR
 
     access.sets := get_set_idx(vpn_reg, nSets) // no use
     access.touch_ways.valid := resp.valid && Cat(hitVecReg).orR
@@ -83,9 +153,6 @@ class TLBFA(
     v(io.w.bits.wayIdx) := true.B
     entries(io.w.bits.wayIdx).apply(io.w.bits.data, io.csr.satp.asid, io.w.bits.data_replenish)
   }
-  // write assert, shoulg not duplicate with the existing entries
-  val w_hit_vec = VecInit(entries.zip(v).map{case (e, vi) => e.hit(io.w.bits.data.entry.tag, io.csr.satp.asid) && vi })
-  XSError(io.w.valid && Cat(w_hit_vec).orR, s"${parentName} refill, duplicate with existing entries")
 
   val refill_vpn_reg = RegNext(io.w.bits.data.entry.tag)
   val refill_wayIdx_reg = RegNext(io.w.bits.wayIdx)
@@ -136,6 +203,11 @@ class TLBFA(
 
   XSPerfAccumulate(s"access", io.r.resp.map(_.valid.asUInt()).fold(0.U)(_ + _))
   XSPerfAccumulate(s"hit", io.r.resp.map(a => a.valid && a.bits.hit).fold(0.U)(_.asUInt() + _.asUInt()))
+  for (i <- 0 until ports) {
+    XSPerfAccumulate(s"accessPorts$i", io.r.resp(i).valid)
+    XSPerfAccumulate(s"hitPorts$i", io.r.resp(i).valid && io.r.resp(i).bits.hit)
+    XSPerfAccumulate(s"hitspPorts$i", io.r.resp(i).valid && io.r.resp(i).bits.hit && isSuperPage(i))
+  }
 
   for (i <- 0 until nWays) {
     XSPerfAccumulate(s"access${i}", io.r.resp.zip(io.access.map(acc => UIntToOH(acc.touch_ways.bits))).map{ case (a, b) =>
@@ -151,30 +223,33 @@ class TLBFA(
   )
   generatePerfEvent()
 
-  println(s"${parentName} tlb_fa: nSets${nSets} nWays:${nWays}")
+  println(s"tlb_fa: nSets${nSets} nWays:${nWays}")
 }
 
 @chiselName
 class TLBSA(
-  parentName: String,
+  sameCycle: Boolean,
   ports: Int,
+  nDups: Int,
   nSets: Int,
   nWays: Int,
   normalPage: Boolean,
   superPage: Boolean
 )(implicit p: Parameters) extends TlbModule {
   require(!superPage, "super page should use reg/fa")
+  require(!sameCycle, "syncDataModule needs next cycle")
   require(nWays == 1, "nWays larger than 1 causes bad timing")
 
   // timing optimization to divide v select into two cycles.
   val VPRE_SELECT = min(8, nSets)
   val VPOST_SELECT = nSets / VPRE_SELECT
+  val nBanks = 8
 
-  val io = IO(new TlbStorageIO(nSets, nWays, ports))
+  val io = IO(new TlbStorageIO(nSets, nWays, ports, nDups))
 
   io.r.req.map(_.ready :=  true.B)
   val v = RegInit(VecInit(Seq.fill(nSets)(VecInit(Seq.fill(nWays)(false.B)))))
-  val entries = Module(new SyncDataModuleTemplate(new TlbEntry(normalPage, superPage), nSets, ports, 1))
+  val entries = Module(new BankedAsyncDataModuleTemplateWithDup(new TlbEntry(normalPage, superPage), nSets, ports, nDups, nBanks))
 
   for (i <- 0 until ports) { // duplicate sram
     val req = io.r.req(i)
@@ -188,14 +263,17 @@ class TLBSA(
     val v_resize = v.asTypeOf(Vec(VPRE_SELECT, Vec(VPOST_SELECT, UInt(nWays.W))))
     val vidx_resize = RegNext(v_resize(get_set_idx(drop_set_idx(vpn, VPOST_SELECT), VPRE_SELECT)))
     val vidx = vidx_resize(get_set_idx(vpn_reg, VPOST_SELECT)).asBools.map(_ && RegNext(req.fire()))
-    val vidx_bypass = RegNext((entries.io.waddr(0) === ridx) && entries.io.wen(0))
+    val vidx_bypass = RegNext((entries.io.waddr === ridx) && entries.io.wen)
     entries.io.raddr(i) := ridx
 
     val data = entries.io.rdata(i)
-    val hit = data.hit(vpn_reg, io.csr.satp.asid, nSets) && (vidx(0) || vidx_bypass)
+    val hit = data(0).hit(vpn_reg, io.csr.satp.asid, nSets) && (vidx(0) || vidx_bypass)
     resp.bits.hit := hit
-    resp.bits.ppn := data.genPPN()(vpn_reg)
-    resp.bits.perm := data.perm
+    for (d <- 0 until nDups) {
+      resp.bits.ppn(d) := data(d).genPPN()(vpn_reg)
+      resp.bits.perm(d) := data(d).perm
+    }
+    io.r.resp_hit_sameCycle(i) := DontCare
 
     resp.valid := { RegNext(req.valid) }
     resp.bits.hit.suggestName("hit")
@@ -207,12 +285,11 @@ class TLBSA(
     access.touch_ways.bits := 1.U // TODO: set-assoc need no replacer when nset is 1
   }
 
-  // W ports should be 1, or, check at above will be wrong.
-  entries.io.wen(0) := io.w.valid || io.victim.in.valid
-  entries.io.waddr(0) := Mux(io.w.valid,
+  entries.io.wen := io.w.valid || io.victim.in.valid
+  entries.io.waddr := Mux(io.w.valid,
     get_set_idx(io.w.bits.data.entry.tag, nSets),
     get_set_idx(io.victim.in.bits.entry.tag, nSets))
-  entries.io.wdata(0) := Mux(io.w.valid,
+  entries.io.wdata := Mux(io.w.valid,
     (Wire(new TlbEntry(normalPage, superPage)).apply(io.w.bits.data, io.csr.satp.asid, io.w.bits.data_replenish)),
     io.victim.in.bits.entry)
 
@@ -252,17 +329,25 @@ class TLBSA(
   XSPerfAccumulate(s"hit", io.r.resp.map(a => a.valid && a.bits.hit).fold(0.U)(_.asUInt() + _.asUInt()))
 
   for (i <- 0 until nSets) {
-    XSPerfAccumulate(s"refill${i}", (io.w.valid || io.victim.in.valid) &&
-        (Mux(io.w.valid, get_set_idx(io.w.bits.data.entry.tag, nSets), get_set_idx(io.victim.in.bits.entry.tag, nSets)) === i.U)
+    for (j <- 0 until nWays) {
+
+      XSPerfAccumulate(s"refill${i}_${j}", (io.w.valid || io.victim.in.valid) &&
+        (Mux(io.w.valid, get_set_idx(io.w.bits.data.entry.tag, nSets), get_set_idx(io.victim.in.bits.entry.tag, nSets)) === i.U) &&
+        (j.U === io.w.bits.wayIdx)
       )
+    }
   }
 
   for (i <- 0 until nSets) {
-    XSPerfAccumulate(s"hit${i}", io.r.resp.map(a => a.valid & a.bits.hit)
-      .zip(io.r.req.map(a => RegNext(get_set_idx(a.bits.vpn, nSets)) === i.U))
-      .map{a => (a._1 && a._2).asUInt()}
-      .fold(0.U)(_ + _)
-    )
+    for (j <- 0 until nWays) {
+      XSPerfAccumulate(s"hit${i}_${j}", io.r.resp.map(_.valid)
+        .zip(io.access.map(a => UIntToOH(a.touch_ways.bits)(j)))
+        .map{case(vi, hi) => vi && hi }
+        .zip(io.r.req.map(a => RegNext(get_set_idx(a.bits.vpn, nSets)) === i.U))
+        .map{a => (a._1 && a._2).asUInt()}
+        .fold(0.U)(_ + _)
+      )
+    }
   }
 
   for (i <- 0 until nSets) {
@@ -273,15 +358,17 @@ class TLBSA(
     )
   }
 
-  println(s"${parentName} tlb_sa: nSets:${nSets} nWays:${nWays}")
+  println(s"tlb_sa: nSets:${nSets} nWays:${nWays}")
 }
 
 object TlbStorage {
   def apply
   (
-    parentName: String,
+    name: String,
     associative: String,
+    sameCycle: Boolean,
     ports: Int,
+    nDups: Int = 1,
     nSets: Int,
     nWays: Int,
     saveLevel: Boolean = false,
@@ -289,123 +376,13 @@ object TlbStorage {
     superPage: Boolean
   )(implicit p: Parameters) = {
     if (associative == "fa") {
-       val storage = Module(new TLBFA(parentName, ports, nSets, nWays, saveLevel, normalPage, superPage))
-       storage.suggestName(s"${parentName}_fa")
+       val storage = Module(new TLBFA(sameCycle, ports, nSets, nWays, saveLevel, normalPage, superPage))
+       storage.suggestName(s"tlb_${name}_fa")
        storage.io
     } else {
-       val storage = Module(new TLBSA(parentName, ports, nSets, nWays, normalPage, superPage))
-       storage.suggestName(s"${parentName}_sa")
+       val storage = Module(new TLBSA(sameCycle, ports, nDups, nSets, nWays, normalPage, superPage))
+       storage.suggestName(s"tlb_${name}_sa")
        storage.io
     }
-  }
-}
-
-class TlbStorageWrapper(ports: Int, q: TLBParameters)(implicit p: Parameters) extends TlbModule {
-  val io = IO(new TlbStorageWrapperIO(ports, q))
-
-// TODO: wrap Normal page and super page together, wrap the declare & refill dirty codes
-  val normalPage = TlbStorage(
-    parentName = q.name + "_np_storage",
-    associative = q.normalAssociative,
-    ports = ports,
-    nSets = q.normalNSets,
-    nWays = q.normalNWays,
-    saveLevel = q.saveLevel,
-    normalPage = true,
-    superPage = false
-  )
-  val superPage = TlbStorage(
-    parentName = q.name + "_sp_storage",
-    associative = q.superAssociative,
-    ports = ports,
-    nSets = q.superNSets,
-    nWays = q.superNWays,
-    normalPage = q.normalAsVictim,
-    superPage = true,
-  )
-
-  for (i <- 0 until ports) {
-    normalPage.r_req_apply(
-      valid = io.r.req(i).valid,
-      vpn = io.r.req(i).bits.vpn,
-      i = i
-    )
-    superPage.r_req_apply(
-      valid = io.r.req(i).valid,
-      vpn = io.r.req(i).bits.vpn,
-      i = i
-    )
-  }
-
-  for (i <- 0 until ports) {
-    val nq = normalPage.r.req(i)
-    val np = normalPage.r.resp(i)
-    val sq = superPage.r.req(i)
-    val sp = superPage.r.resp(i)
-    val rq = io.r.req(i)
-    val rp = io.r.resp(i)
-    rq.ready := nq.ready && sq.ready // actually, not used
-    rp.valid := np.valid && sp.valid // actually, not used
-    rp.bits.hit := np.bits.hit || sp.bits.hit
-    rp.bits.ppn := Mux(sp.bits.hit, sp.bits.ppn, np.bits.ppn)
-    rp.bits.perm := Mux(sp.bits.hit, sp.bits.perm, np.bits.perm)
-    rp.bits.super_hit := sp.bits.hit
-    rp.bits.super_ppn := sp.bits.ppn
-    rp.bits.spm := np.bits.perm.pm
-    assert(!np.bits.hit || !sp.bits.hit || !rp.valid, s"${q.name} storage ports${i} normal and super multi-hit")
-  }
-
-  normalPage.victim.in <> superPage.victim.out
-  normalPage.victim.out <> superPage.victim.in
-  normalPage.sfence <> io.sfence
-  superPage.sfence <> io.sfence
-  normalPage.csr <> io.csr
-  superPage.csr <> io.csr
-
-  val normal_refill_idx = if (q.outReplace) {
-    io.replace.normalPage.access <> normalPage.access
-    io.replace.normalPage.chosen_set := get_set_idx(io.w.bits.data.entry.tag, q.normalNSets)
-    io.replace.normalPage.refillIdx
-  } else if (q.normalAssociative == "fa") {
-    val re = ReplacementPolicy.fromString(q.normalReplacer, q.normalNWays)
-    re.access(normalPage.access.map(_.touch_ways)) // normalhitVecVec.zipWithIndex.map{ case (hv, i) => get_access(hv, validRegVec(i))})
-    re.way
-  } else { // set-acco && plru
-    val re = ReplacementPolicy.fromString(q.normalReplacer, q.normalNSets, q.normalNWays)
-    re.access(normalPage.access.map(_.sets), normalPage.access.map(_.touch_ways))
-    re.way(get_set_idx(io.w.bits.data.entry.tag, q.normalNSets))
-  }
-
-  val super_refill_idx = if (q.outReplace) {
-    io.replace.superPage.access <> superPage.access
-    io.replace.superPage.chosen_set := DontCare
-    io.replace.superPage.refillIdx
-  } else {
-    val re = ReplacementPolicy.fromString(q.superReplacer, q.superNWays)
-    re.access(superPage.access.map(_.touch_ways))
-    re.way
-  }
-
-  normalPage.w_apply(
-    valid = { if (q.normalAsVictim) false.B
-    else io.w.valid && io.w.bits.data.entry.level.get === 2.U },
-    wayIdx = normal_refill_idx,
-    data = io.w.bits.data,
-    data_replenish = io.w.bits.data_replenish
-  )
-  superPage.w_apply(
-    valid = { if (q.normalAsVictim) io.w.valid
-    else io.w.valid && io.w.bits.data.entry.level.get =/= 2.U },
-    wayIdx = super_refill_idx,
-    data = io.w.bits.data,
-    data_replenish = io.w.bits.data_replenish
-  )
-
-    // replacement
-  def get_access(one_hot: UInt, valid: Bool): Valid[UInt] = {
-    val res = Wire(Valid(UInt(log2Up(one_hot.getWidth).W)))
-    res.valid := Cat(one_hot).orR && valid
-    res.bits := OHToUInt(one_hot)
-    res
   }
 }

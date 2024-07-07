@@ -129,7 +129,7 @@ trait HasPipelineReg {
 
   def PipelineReg[TT <: Data](i: Int)(next: TT) = RegEnable(
     next,
-    regEnable(i)
+    enable = regEnable(i)
   )
 
   def S1Reg[TT <: Data](next: TT): TT = PipelineReg[TT](1)(next)

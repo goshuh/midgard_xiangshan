@@ -17,13 +17,14 @@
 package xiangshan.frontend
 
 import chipsalliance.rocketchip.config.Parameters
-import freechips.rocketchip.rocket.{RVCDecoder, ExpandedInstruction}
+import freechips.rocketchip.rocket.{ExpandedInstruction, RVCDecoder}
 import chisel3.{util, _}
 import chisel3.util._
 import utils._
 import xiangshan._
 import xiangshan.frontend.icache._
 import xiangshan.backend.decode.isa.predecode.PreDecodeInst
+import xiangshan.backend.fu.util.SdtrigExt
 
 trait HasPdConst extends HasXSParameter with HasICacheParameters with HasIFUConst{
   def isRVC(inst: UInt) = (inst(1,0) =/= 3.U)
@@ -81,7 +82,8 @@ class PreDecodeInfo extends Bundle {  // 8 bit
 class PreDecodeResp(implicit p: Parameters) extends XSBundle with HasPdConst {
   val pd = Vec(PredictWidth, new PreDecodeInfo)
   val hasHalfValid = Vec(PredictWidth, Bool())
-  val expInstr = Vec(PredictWidth, UInt(32.W))
+  //val expInstr = Vec(PredictWidth, UInt(32.W))
+  val instr      = Vec(PredictWidth, UInt(32.W))
   val jumpOffset = Vec(PredictWidth, UInt(XLEN.W))
 //  val hasLastHalf = Bool()
   val triggered    = Vec(PredictWidth, new TriggerCf)
@@ -103,10 +105,10 @@ class PreDecode(implicit p: Parameters) extends XSModule with HasPdConst{
 
   for (i <- 0 until PredictWidth) {
     val inst           =WireInit(rawInsts(i))
-    val expander       = Module(new RVCExpander)
+    //val expander       = Module(new RVCExpander)
     val currentIsRVC   = isRVC(inst)
     val currentPC      = io.in.pc(i)
-    expander.io.in             := inst
+    //expander.io.in             := inst
 
     val brType::isCall::isRet::Nil = brInfo(inst)
     val jalOffset = jal_offset(inst, currentIsRVC)
@@ -134,7 +136,8 @@ class PreDecode(implicit p: Parameters) extends XSModule with HasPdConst{
     io.out.pd(i).isCall        := isCall
     io.out.pd(i).isRet         := isRet
 
-    io.out.expInstr(i)         := expander.io.out.bits
+    //io.out.expInstr(i)         := expander.io.out.bits
+    io.out.instr(i)              :=inst
     io.out.jumpOffset(i)       := Mux(io.out.pd(i).isBr, brOffset, jalOffset)
   }
 
@@ -142,7 +145,7 @@ class PreDecode(implicit p: Parameters) extends XSModule with HasPdConst{
 
   for (i <- 0 until PredictWidth) {
     XSDebug(true.B,
-      p"instr ${Hexadecimal(io.out.expInstr(i))}, " +
+      p"instr ${Hexadecimal(io.out.instr(i))}, " +
         p"validStart ${Binary(validStart(i))}, " +
         p"validEnd ${Binary(validEnd(i))}, " +
         p"isRVC ${Binary(io.out.pd(i).isRVC)}, " +
@@ -192,13 +195,17 @@ class CheckInfo extends Bundle {  // 8 bit
 }
 
 class PredCheckerResp(implicit p: Parameters) extends XSBundle with HasPdConst {
-  //to Ibuffer write port (timing critical)
-  val fixedRange  = Vec(PredictWidth, Bool())
-  val fixedTaken  = Vec(PredictWidth, Bool())
-  //to Ftq write back port (not timing critical)
-  val fixedTarget = Vec(PredictWidth, UInt(VAddrBits.W))
-  val fixedMissPred = Vec(PredictWidth,  Bool())
-  val faultType   = Vec(PredictWidth, new CheckInfo)
+  //to Ibuffer write port  (stage 1)
+  val stage1Out = new Bundle{
+    val fixedRange  = Vec(PredictWidth, Bool())
+    val fixedTaken  = Vec(PredictWidth, Bool())
+  }
+  //to Ftq write back port (stage 2)
+  val stage2Out = new Bundle{
+    val fixedTarget = Vec(PredictWidth, UInt(VAddrBits.W))
+    val fixedMissPred = Vec(PredictWidth,  Bool())
+    val faultType   = Vec(PredictWidth, new CheckInfo) 
+  }
 }
 
 
@@ -220,6 +227,7 @@ class PredChecker(implicit p: Parameters) extends XSModule with HasPdConst {
     * we first detecct remask fault and then use fixedRange to do second check
     **/
 
+  //Stage 1: detect remask fault
   /** first check: remask Fault */
   jalFaultVec         := VecInit(pds.zipWithIndex.map{case(pd, i) => pd.isJal && instrRange(i) && instrValid(i) && (takenIdx > i.U && predTaken || !predTaken) })
   retFaultVec         := VecInit(pds.zipWithIndex.map{case(pd, i) => pd.isRet && instrRange(i) && instrValid(i) && (takenIdx > i.U && predTaken || !predTaken) })
@@ -228,36 +236,44 @@ class PredChecker(implicit p: Parameters) extends XSModule with HasPdConst {
   val needRemask       = ParallelOR(remaskFault)
   val fixedRange       = instrRange.asUInt & (Fill(PredictWidth, !needRemask) | Fill(PredictWidth, 1.U(1.W)) >> ~remaskIdx)
 
-  io.out.fixedRange := fixedRange.asTypeOf((Vec(PredictWidth, Bool())))
+  io.out.stage1Out.fixedRange := fixedRange.asTypeOf((Vec(PredictWidth, Bool())))
 
-  io.out.fixedTaken := VecInit(pds.zipWithIndex.map{case(pd, i) => instrValid (i) && fixedRange(i) && (pd.isRet || pd.isJal || takenIdx === i.U && predTaken && !pd.notCFI)  })
+  io.out.stage1Out.fixedTaken := VecInit(pds.zipWithIndex.map{case(pd, i) => instrValid (i) && fixedRange(i) && (pd.isRet || pd.isJal || takenIdx === i.U && predTaken && !pd.notCFI)  })
 
   /** second check: faulse prediction fault and target fault */
   notCFITaken  := VecInit(pds.zipWithIndex.map{case(pd, i) => fixedRange(i) && instrValid(i) && i.U === takenIdx && pd.notCFI && predTaken })
   invalidTaken := VecInit(pds.zipWithIndex.map{case(pd, i) => fixedRange(i) && !instrValid(i)  && i.U === takenIdx  && predTaken })
 
-  /** target calculation  */
   val jumpTargets          = VecInit(pds.zipWithIndex.map{case(pd,i) => pc(i) + jumpOffset(i)})
-  targetFault      := VecInit(pds.zipWithIndex.map{case(pd,i) => fixedRange(i) && instrValid(i) && (pd.isJal || pd.isBr) && takenIdx === i.U && predTaken  && (predTarget =/= jumpTargets(i))})
-
   val seqTargets = VecInit((0 until PredictWidth).map(i => pc(i) + Mux(pds(i).isRVC || !instrValid(i), 2.U, 4.U ) ))
+  targetFault :=  VecInit(pds.zipWithIndex.map{case(pd,i) => fixedRange(i) && instrValid(i) && (pd.isJal || pd.isBr) && takenIdx === i.U && predTaken && (predTarget =/= jumpTargets(i))})
 
-  io.out.faultType.zipWithIndex.map{case(faultType, i) => faultType.value := Mux(jalFaultVec(i) , FaultType.jalFault ,
-                                                                             Mux(retFaultVec(i), FaultType.retFault ,
-                                                                             Mux(targetFault(i), FaultType.targetFault , 
-                                                                             Mux(notCFITaken(i) , FaultType.notCFIFault, 
-                                                                             Mux(invalidTaken(i), FaultType.invalidTaken,  FaultType.noFault)))))}
+  //Stage 2: detect target fault
+  /** target calculation: in the next stage  */
+  val jumpTargetsNext   = RegNext(jumpTargets)
+  val seqTargetsNext    = RegNext(seqTargets)
+  val jalFaultVecNext   = RegNext(jalFaultVec)
+  val retFaultVecNext   = RegNext(retFaultVec)
+  val notCFITakenNext   = RegNext(notCFITaken)
+  val invalidTakenNext  = RegNext(invalidTaken)
+  val targetFaultNext   = RegNext(targetFault)
 
-  io.out.fixedMissPred.zipWithIndex.map{case(missPred, i ) => missPred := jalFaultVec(i) || retFaultVec(i) || notCFITaken(i) || invalidTaken(i) || targetFault(i)}
-  io.out.fixedTarget.zipWithIndex.map{case(target, i) => target := Mux(jalFaultVec(i) || targetFault(i), jumpTargets(i),  seqTargets(i) )}
+
+  io.out.stage2Out.faultType.zipWithIndex.map{case(faultType, i) => faultType.value := Mux(jalFaultVecNext(i) , FaultType.jalFault ,
+                                                                             Mux(retFaultVecNext(i), FaultType.retFault ,
+                                                                             Mux(targetFaultNext(i), FaultType.targetFault , 
+                                                                             Mux(notCFITakenNext(i) , FaultType.notCFIFault, 
+                                                                             Mux(invalidTakenNext(i), FaultType.invalidTaken,  FaultType.noFault)))))}
+
+  io.out.stage2Out.fixedMissPred.zipWithIndex.map{case(missPred, i ) => missPred := jalFaultVecNext(i) || retFaultVecNext(i) || notCFITakenNext(i) || invalidTakenNext(i) || targetFaultNext(i)}
+  io.out.stage2Out.fixedTarget.zipWithIndex.map{case(target, i) => target := Mux(jalFaultVecNext(i) || targetFaultNext(i), jumpTargetsNext(i),  seqTargetsNext(i) )}
 
 }
 
-class FrontendTrigger(implicit p: Parameters) extends XSModule {
+class FrontendTrigger(implicit p: Parameters) extends XSModule with SdtrigExt {
   val io = IO(new Bundle(){
     val frontendTrigger = Input(new FrontendTdataDistributeIO)
-    val csrTriggerEnable = Input(Vec(4, Bool()))
-    val triggered    = Output(Vec(PredictWidth, new TriggerCf))
+    val triggered     = Output(Vec(PredictWidth, new TriggerCf))
 
     val pds           = Input(Vec(PredictWidth, new PreDecodeInfo))
     val pc            = Input(Vec(PredictWidth, UInt(VAddrBits.W)))
@@ -270,40 +286,45 @@ class FrontendTrigger(implicit p: Parameters) extends XSModule {
   val rawInsts = if (HasCExtension) VecInit((0 until PredictWidth).map(i => Cat(data(i+1), data(i))))
                         else         VecInit((0 until PredictWidth).map(i => data(i)))
 
-  val tdata = RegInit(VecInit(Seq.fill(4)(0.U.asTypeOf(new MatchTriggerIO))))
-  when(io.frontendTrigger.t.valid) {
-    tdata(io.frontendTrigger.t.bits.addr) := io.frontendTrigger.t.bits.tdata
+  val tdata = RegInit(VecInit(Seq.fill(TriggerNum)(0.U.asTypeOf(new MatchTriggerIO))))
+  when(io.frontendTrigger.tUpdate.valid) {
+    tdata(io.frontendTrigger.tUpdate.bits.addr) := io.frontendTrigger.tUpdate.bits.tdata
   }
-  io.triggered.map{i => i := 0.U.asTypeOf(new TriggerCf)}
-  val triggerEnable = RegInit(VecInit(Seq.fill(4)(false.B))) // From CSR, controlled by priv mode, etc.
-  triggerEnable := io.csrTriggerEnable
-  XSDebug(triggerEnable.asUInt.orR, "Debug Mode: At least one frontend trigger is enabled\n")
+//  io.triggered.foreach{ i => i := 0.U.asTypeOf(new TriggerCf)}
+  val triggerEnableVec = RegInit(VecInit(Seq.fill(TriggerNum)(false.B))) // From CSR, controlled by priv mode, etc.
+  triggerEnableVec := io.frontendTrigger.tEnableVec
+  XSDebug(triggerEnableVec.asUInt.orR, "Debug Mode: At least one frontend trigger is enabled\n")
 
-  for (i <- 0 until 4) {PrintTriggerInfo(triggerEnable(i), tdata(i))}
+  val triggerTimingVec = VecInit(tdata.map(_.timing))
+  val triggerChainVec = VecInit(tdata.map(_.chain))
+
+  for (i <- 0 until TriggerNum) { PrintTriggerInfo(triggerEnableVec(i), tdata(i)) }
 
   for (i <- 0 until PredictWidth) {
     val currentPC = io.pc(i)
     val currentIsRVC = io.pds(i).isRVC
     val inst = WireInit(rawInsts(i))
-    val triggerHitVec = Wire(Vec(4, Bool()))
+    val triggerHitVec = Wire(Vec(TriggerNum, Bool()))
+    val triggerCanFireVec = Wire(Vec(TriggerNum, Bool()))
 
-    for (j <- 0 until 4) {
-      triggerHitVec(j) := Mux(tdata(j).select, TriggerCmp(Mux(currentIsRVC, inst(15, 0), inst), tdata(j).tdata2, tdata(j).matchType, triggerEnable(j)),
-        TriggerCmp(currentPC, tdata(j).tdata2, tdata(j).matchType, triggerEnable(j)))
+    for (j <- 0 until TriggerNum) {
+      triggerHitVec(j) := Mux(
+        tdata(j).select,
+        TriggerCmp(Mux(currentIsRVC, inst(15, 0), inst), tdata(j).tdata2, tdata(j).matchType, triggerEnableVec(j)),
+        TriggerCmp(currentPC, tdata(j).tdata2, tdata(j).matchType, triggerEnableVec(j))
+      )
     }
 
-    // fix chains this could be moved further into the pipeline
+    TriggerCheckCanFire(TriggerNum, triggerCanFireVec, triggerHitVec, triggerTimingVec, triggerChainVec)
+
+    // only hit, no matter fire or not
     io.triggered(i).frontendHit := triggerHitVec
-    val enableChain = tdata(0).chain
-    when(enableChain){
-      io.triggered(i).frontendHit(0) := triggerHitVec(0) && triggerHitVec(1) && (tdata(0).timing === tdata(1).timing)
-      io.triggered(i).frontendHit(1) := triggerHitVec(0) && triggerHitVec(1) && (tdata(0).timing === tdata(1).timing)
-    }
-    for(j <- 0 until 2) {
-      io.triggered(i).backendEn(j) := Mux(tdata(j+2).chain, triggerHitVec(j+2), true.B)
-      io.triggered(i).frontendHit(j+2) := !tdata(j+2).chain && triggerHitVec(j+2) // temporary workaround
-    }
-    XSDebug(io.triggered(i).getHitFrontend, p"Debug Mode: Predecode Inst No. ${i} has trigger hit vec ${io.triggered(i).frontendHit}" +
-      p"and backend en ${io.triggered(i).backendEn}\n")
-  }  
+    // can fire, exception will be handled at rob enq
+    io.triggered(i).frontendCanFire := triggerCanFireVec
+    io.triggered(i).frontendTiming  := triggerTimingVec.zip(triggerEnableVec).map{ case(timing, en) => timing && en}
+    io.triggered(i).frontendChain  := triggerChainVec.zip(triggerEnableVec).map{ case(chain, en) => chain && en}
+    XSDebug(io.triggered(i).getFrontendCanFire, p"Debug Mode: Predecode Inst No. ${i} has trigger fire vec ${io.triggered(i).frontendCanFire}\n")
+  }
+  io.triggered.foreach(_.backendCanFire := VecInit(Seq.fill(TriggerNum)(false.B)))
+  io.triggered.foreach(_.backendHit := VecInit(Seq.fill(TriggerNum)(false.B)))
 }

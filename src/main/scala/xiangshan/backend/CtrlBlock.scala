@@ -27,7 +27,7 @@ import xiangshan.backend.dispatch.{Dispatch, Dispatch2Rs, DispatchQueue}
 import xiangshan.backend.fu.PFEvent
 import xiangshan.backend.rename.{Rename, RenameTableWrapper}
 import xiangshan.backend.rob.{Rob, RobCSRIO, RobLsqIO}
-import xiangshan.frontend.{FtqRead, Ftq_RF_Components}
+import xiangshan.frontend.{FtqPtr, FtqRead, Ftq_RF_Components}
 import xiangshan.mem.mdp.{LFST, SSIT, WaitTable}
 import xiangshan.ExceptionNO._
 import xiangshan.backend.exu.ExuConfig
@@ -130,9 +130,9 @@ class RedirectGenerator(implicit p: Parameters) extends XSModule
   // stage2CfiUpdate.taken := s1_redirect_bits_reg.cfiUpdate.taken
   // stage2CfiUpdate.isMisPred := s1_redirect_bits_reg.cfiUpdate.isMisPred
 
-  val s2_target = RegEnable(target, s1_redirect_valid_reg)
-  val s2_pc = RegEnable(real_pc, s1_redirect_valid_reg)
-  val s2_redirect_bits_reg = RegEnable(s1_redirect_bits_reg, s1_redirect_valid_reg)
+  val s2_target = RegEnable(target, enable = s1_redirect_valid_reg)
+  val s2_pc = RegEnable(real_pc, enable = s1_redirect_valid_reg)
+  val s2_redirect_bits_reg = RegEnable(s1_redirect_bits_reg, enable = s1_redirect_valid_reg)
   val s2_redirect_valid_reg = RegNext(s1_redirect_valid_reg && !io.flush, init = false.B)
 
   io.stage3Redirect.valid := s2_redirect_valid_reg
@@ -152,17 +152,6 @@ class RedirectGenerator(implicit p: Parameters) extends XSModule
   io.memPredUpdate.ldpc := RegNext(XORFold(real_pc(VAddrBits-1, 1), MemPredPCWidth))
   // store pc is ready 1 cycle after s1_isReplay is judged
   io.memPredUpdate.stpc := XORFold(store_pc(VAddrBits-1, 1), MemPredPCWidth)
-
-  // // recover runahead checkpoint if redirect
-  // if (!env.FPGAPlatform) {
-  //   val runahead_redirect = Module(new DifftestRunaheadRedirectEvent)
-  //   runahead_redirect.io.clock := clock
-  //   runahead_redirect.io.coreid := io.hartId
-  //   runahead_redirect.io.valid := io.stage3Redirect.valid
-  //   runahead_redirect.io.pc :=  s2_pc // for debug only
-  //   runahead_redirect.io.target_pc := s2_target // for debug only
-  //   runahead_redirect.io.checkpoint_id := io.stage3Redirect.bits.debug_runahead_checkpoint_id // make sure it is right
-  // }
 }
 
 class CtrlBlock(dpExuConfigs: Seq[Seq[Seq[ExuConfig]]])(implicit p: Parameters) extends LazyModule
@@ -210,7 +199,8 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
     val enqLsq = Flipped(new LsqEnqIO)
     val lqCancelCnt = Input(UInt(log2Up(LoadQueueSize + 1).W))
     val sqCancelCnt = Input(UInt(log2Up(StoreQueueSize + 1).W))
-    val sqDeq = Input(UInt(log2Ceil(EnsbufferWidth + 1).W))
+    val sqDeq = Input(UInt(2.W))
+    val ld_pc_read = Vec(exuParameters.LduCnt, Flipped(new FtqRead(UInt(VAddrBits.W))))
     // from int block
     val exuRedirect = Vec(exuParameters.AluCnt + exuParameters.JmpCnt, Flipped(ValidIO(new ExuOutput)))
     val stIn = Vec(exuParameters.StuCnt, Flipped(ValidIO(new ExuInput)))
@@ -238,7 +228,7 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
     val redirect = ValidIO(new Redirect)
     val debug_int_rat = Vec(32, Output(UInt(PhyRegIdxWidth.W)))
     val debug_fp_rat = Vec(32, Output(UInt(PhyRegIdxWidth.W)))
-    val isec = new ISECIO()
+    val ise = new ISEIO()
   })
 
   override def writebackSource: Option[Seq[Seq[Valid[ExuOutput]]]] = {
@@ -265,20 +255,16 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
   val fpDq = Module(new DispatchQueue(dpParams.FpDqSize, RenameWidth, dpParams.FpDqDeqWidth))
   val lsDq = Module(new DispatchQueue(dpParams.LsDqSize, RenameWidth, dpParams.LsDqDeqWidth))
   val redirectGen = Module(new RedirectGenerator)
-  // jumpPc (2) + redirects (1) + loadPredUpdate (1) + robFlush (1)
-  val pcMem = Module(new SyncDataModuleTemplate(new Ftq_RF_Components, FtqSize, 5, 1))
-  val jalrTargetMem = Module(new SyncDataModuleTemplate(UInt(VAddrBits.W), FtqSize, 2, 2))
+  // jumpPc (2) + redirects (1) + loadPredUpdate (1) + jalr_target (1) + [ld pc (LduCnt)] + robFlush (1)
+  val pcMem = Module(new SyncDataModuleTemplate(
+    new Ftq_RF_Components, FtqSize,
+    6 + exuParameters.LduCnt, 1, "CtrlPcMem")
+  )
   val rob = outer.rob.module
 
   pcMem.io.wen.head   := RegNext(io.frontend.fromFtq.pc_mem_wen)
   pcMem.io.waddr.head := RegNext(io.frontend.fromFtq.pc_mem_waddr)
   pcMem.io.wdata.head := RegNext(io.frontend.fromFtq.pc_mem_wdata)
-  jalrTargetMem.io.wen.head   := RegNext(io.frontend.fromFtq.pc_mem_wen)
-  jalrTargetMem.io.waddr.head := RegNext(io.frontend.fromFtq.pc_mem_waddr)
-  jalrTargetMem.io.wdata.head := RegNext(io.frontend.fromFtq.target)
-  jalrTargetMem.io.wen.tail.head   := RegNext(io.frontend.fromFtq.pd_redirect_waddr.valid)
-  jalrTargetMem.io.waddr.tail.head := RegNext(io.frontend.fromFtq.pd_redirect_waddr.bits)
-  jalrTargetMem.io.wdata.tail.head := RegNext(io.frontend.fromFtq.pd_redirect_target)
 
 
   pcMem.io.raddr.last := rob.io.flushOut.bits.ftqIdx.value
@@ -290,7 +276,7 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
 
   val flushRedirectReg = Wire(Valid(new Redirect))
   flushRedirectReg.valid := RegNext(flushRedirect.valid, init = false.B)
-  flushRedirectReg.bits := RegEnable(flushRedirect.bits, flushRedirect.valid)
+  flushRedirectReg.bits := RegEnable(flushRedirect.bits, enable = flushRedirect.valid)
 
   val stage2Redirect = Mux(flushRedirect.valid, flushRedirect, redirectGen.io.stage2Redirect)
   // Redirect will be RegNext at ExuBlocks.
@@ -399,7 +385,7 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
   for (i <- 0 until RenameWidth) {
     // fusion decoder
     val decodeHasException = io.frontend.cfVec(i).bits.exceptionVec(instrPageFault) || io.frontend.cfVec(i).bits.exceptionVec(instrAccessFault)
-    val disableFusion = decode.io.csrCtrl.singlestep
+    val disableFusion = decode.io.csrCtrl.singlestep || !decode.io.csrCtrl.fusion_enable
     fusionDecoder.io.in(i).valid := io.frontend.cfVec(i).valid && !(decodeHasException || disableFusion)
     fusionDecoder.io.in(i).bits := io.frontend.cfVec(i).bits.instr
     if (i > 0) {
@@ -501,10 +487,18 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
   val jumpPcRead0 = pcMem.io.rdata(0).getPc(RegNext(intDq.io.deqNext(0).cf.ftqOffset))
   val jumpPcRead1 = pcMem.io.rdata(1).getPc(RegNext(intDq.io.deqNext(2).cf.ftqOffset))
   io.jumpPc := Mux(pingpong && (exuParameters.AluCnt > 2).B, jumpPcRead1, jumpPcRead0)
-  jalrTargetMem.io.raddr(0) := intDq.io.deqNext(0).cf.ftqPtr.value
-  jalrTargetMem.io.raddr(1) := intDq.io.deqNext(2).cf.ftqPtr.value
-  val jalrTargetRead = jalrTargetMem.io.rdata
-  io.jalr_target := Mux(pingpong && (exuParameters.AluCnt > 2).B, jalrTargetRead(1), jalrTargetRead(0))
+  val jalrTargetReadPtr = Mux(pingpong && (exuParameters.AluCnt > 2).B,
+    io.dispatch(2).bits.cf.ftqPtr,
+    io.dispatch(0).bits.cf.ftqPtr)
+  pcMem.io.raddr(4) := (jalrTargetReadPtr + 1.U).value
+  val jalrTargetRead = pcMem.io.rdata(4).startAddr
+  val read_from_newest_entry = RegNext(jalrTargetReadPtr) === RegNext(io.frontend.fromFtq.newest_entry_ptr)
+  io.jalr_target := Mux(read_from_newest_entry, RegNext(io.frontend.fromFtq.newest_entry_target), jalrTargetRead)
+  for(i <- 0 until exuParameters.LduCnt){
+    // load s0 -> get rdata (s1) -> reg next (s2) -> output (s2)
+    pcMem.io.raddr(i + 5) := io.ld_pc_read(i).ptr.value
+    io.ld_pc_read(i).data := pcMem.io.rdata(i + 5).getPc(RegNext(io.ld_pc_read(i).offset))
+  }
 
   rob.io.hartId := io.hartId
   io.cpu_halt := DelayN(rob.io.cpu_halt, 5)
@@ -513,11 +507,14 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
 
   io.redirect <> stage2Redirect
 
-  dispatch.io.ise := io.isec.drain
-  rob     .io.ise := io.isec.valid
+  dispatch.io.ise := io.ise.drain
+  rob     .io.ise := io.ise.valid
 
   // rob to int block
   io.robio.toCSR <> rob.io.csr
+  // When wfi is disabled, it will not block ROB commit.
+  rob.io.csr.wfiEvent := io.robio.toCSR.wfiEvent
+  rob.io.wfi_enable := decode.io.csrCtrl.wfi_enable
   io.robio.toCSR.perfinfo.retiredInstr <> RegNext(rob.io.csr.perfinfo.retiredInstr)
   io.robio.exception := rob.io.exception
   io.robio.exception.bits.uop.cf.pc := flushPC
@@ -540,8 +537,21 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
     val perfEventsEu1     = Input(Vec(6, new PerfEvent))
   })
 
-  val allPerfEvents = Seq(decode, rename, dispatch, intDq, fpDq, lsDq, rob).flatMap(_.getPerf)
-  val hpmEvents = allPerfEvents ++ perfinfo.perfEventsEu0 ++ perfinfo.perfEventsEu1 ++ perfinfo.perfEventsRs
-  val perfEvents = HPerfMonitor(csrevents, hpmEvents).getPerfEvents
+  val perfFromUnits = Seq(decode, rename, dispatch, intDq, fpDq, lsDq, rob).flatMap(_.getPerfEvents)
+  val perfFromIO    = perfinfo.perfEventsEu0.map(x => ("perfEventsEu0", x.value)) ++
+                        perfinfo.perfEventsEu1.map(x => ("perfEventsEu1", x.value)) ++
+                        perfinfo.perfEventsRs.map(x => ("perfEventsRs", x.value))
+  val perfBlock     = Seq()
+  // let index = 0 be no event
+  val allPerfEvents = Seq(("noEvent", 0.U)) ++ perfFromUnits ++ perfFromIO ++ perfBlock
+
+  if (printEventCoding) {
+    for (((name, inc), i) <- allPerfEvents.zipWithIndex) {
+      println("CtrlBlock perfEvents Set", name, inc, i)
+    }
+  }
+
+  val allPerfInc = allPerfEvents.map(_._2.asTypeOf(new PerfEvent))
+  val perfEvents = HPerfMonitor(csrevents, allPerfInc).getPerfEvents
   generatePerfEvent()
 }

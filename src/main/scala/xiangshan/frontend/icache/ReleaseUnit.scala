@@ -39,7 +39,7 @@ class ICacheReleaseBundle(implicit p: Parameters) extends  ICacheBundle{
   val req = Vec(2, Flipped(DecoupledIO(new ReleaseReq)))
 }
 
-class ReleaseEntry(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
+class RealeaseEntry(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
 {
   val io = IO(new Bundle {
     val id = Input(UInt())
@@ -52,6 +52,7 @@ class ReleaseEntry(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
 
   val s_invalid :: s_release_req :: s_release_resp :: Nil = Enum(3)
   val state = RegInit(s_invalid)
+  val state_dup = RegInit(s_invalid)
 
   val req  = Reg(new ReleaseReq)
   val req_ptag = get_phy_tag(req.addr)
@@ -66,7 +67,7 @@ class ReleaseEntry(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
 
   val busy = remain.orR
 
-  io.req.ready := state === s_invalid
+  io.req.ready := state_dup === s_invalid
   io.mem_grant.ready := false.B
   io.finish := false.B
 
@@ -74,6 +75,7 @@ class ReleaseEntry(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
     req        := io.req.bits
     remain_set := ~0.U(refillCycles.W)
     state      := s_release_req
+    state_dup  := s_release_req
   }
 
   val beat = PriorityEncoder(remain)
@@ -117,6 +119,7 @@ class ReleaseEntry(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
 
   when (state === s_release_req && release_done) {
     state := Mux(req.voluntary, s_release_resp, s_invalid)
+    state_dup := Mux(req.voluntary, s_release_resp, s_invalid)
   }
 
   // --------------------------------------------------------------------------------
@@ -126,6 +129,7 @@ class ReleaseEntry(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
     when (io.mem_grant.fire()) {
       io.finish := true.B
       state := s_invalid
+      state_dup := s_invalid
     }
   }
 
@@ -149,16 +153,17 @@ class ReleaseUnit(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheModule
   io.mem_release.bits  := DontCare
   io.mem_grant.ready   := false.B
 
-  val entry = Module(new ReleaseEntry(edge))
+  val entry = Module(new RealeaseEntry(edge))
 
-  entry.io.id := 0.U
+  entry.io.id := releaseUnitIDStart.U
+  println(s"release entry ID: ${releaseUnitIDStart}")
 
   // entry req
   entry.io.req.valid := io.req.valid
   entry.io.req.bits  := io.req.bits
   io.req.ready    := entry.io.req.ready
 
-  entry.io.mem_grant.valid := (0.U === io.mem_grant.bits.source) && io.mem_grant.valid
+  entry.io.mem_grant.valid := (releaseUnitIDStart.U === io.mem_grant.bits.source) && io.mem_grant.valid
   entry.io.mem_grant.bits  := io.mem_grant.bits
   io.mem_grant.ready := entry.io.mem_grant.ready
 

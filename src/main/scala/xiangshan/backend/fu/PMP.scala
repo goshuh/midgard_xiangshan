@@ -60,6 +60,26 @@ class PMPConfig(implicit p: Parameters) extends PMPBundle {
   def addr_locked(next: PMPConfig): Bool = locked || (next.locked && next.tor)
 }
 
+object PMPConfigUInt {
+  def apply(
+    l: Boolean = false,
+    c: Boolean = false,
+    atomic: Boolean = false,
+    a: Int = 0,
+    x: Boolean = false,
+    w: Boolean = false,
+    r: Boolean = false)(implicit p: Parameters): UInt = {
+    var config = 0
+    if (l) { config += (1 << 7) }
+    if (c) { config += (1 << 6) }
+    if (atomic) { config += (1 << 5) }
+    if (a > 0) { config += (a << 3) }
+    if (x) { config += (1 << 2) }
+    if (w) { config += (1 << 1) }
+    if (r) { config += (1 << 0) }
+    config.U(8.W)
+  }
+}
 trait PMPReadWriteMethodBare extends PMPConst {
   def match_mask(cfg: PMPConfig, paddr: UInt) = {
     val match_mask_c_addr = Cat(paddr, cfg.a(0)) | (((1 << PlatformGrain) - 1) >> PMPOffBits).U((paddr.getWidth + 1).W)
@@ -379,8 +399,8 @@ class PMPRespBundle(implicit p: Parameters) extends PMPBundle {
 trait PMPCheckMethod extends PMPConst {
   def pmp_check(cmd: UInt, cfg: PMPConfig) = {
     val resp = Wire(new PMPRespBundle)
-    resp.ld := TlbCmd.isRead(cmd) && !TlbCmd.isAtom(cmd) && !cfg.r
-    resp.st := (TlbCmd.isWrite(cmd) || TlbCmd.isAtom(cmd)) && !cfg.w
+    resp.ld := TlbCmd.isRead(cmd) && !TlbCmd.isAmo(cmd) && !cfg.r
+    resp.st := (TlbCmd.isWrite(cmd) || TlbCmd.isAmo(cmd)) && !cfg.w
     resp.instr := TlbCmd.isExec(cmd) && !cfg.x
     resp.mmio := false.B
     resp
@@ -425,7 +445,7 @@ trait PMPCheckMethod extends PMPConst {
     cfg_vec(num) := pmpDefault
 
     if (leaveHitMux) {
-      ParallelPriorityMux(match_vec.map(RegEnable(_, false.B, valid)), RegEnable(cfg_vec, valid))
+      ParallelPriorityMux(match_vec.map(RegEnable(_, init = false.B, valid)), RegEnable(cfg_vec, valid))
     } else {
       ParallelPriorityMux(match_vec, cfg_vec)
     }

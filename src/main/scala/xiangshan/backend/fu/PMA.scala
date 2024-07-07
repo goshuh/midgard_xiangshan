@@ -19,8 +19,10 @@ package xiangshan.backend.fu
 import chisel3._
 import chisel3.util._
 import freechips.rocketchip.regmapper.{RegField, RegFieldDesc, RegReadFn, RegWriteFn}
-import utils.{ParallelPriorityMux, ZeroExt, ValidHold}
+import utils.{ParallelPriorityMux, ValidHold, ZeroExt}
 import xiangshan.cache.mmu.TlbCmd
+
+import scala.collection.mutable.ListBuffer
 
 /* Memory Mapped PMA */
 case class MMPMAConfig
@@ -93,119 +95,129 @@ trait MMPMAMethod extends PMAConst with PMAMethod with PMPReadWriteMethodBare {
 
 trait PMAMethod extends PMAConst {
   /**
-  def SimpleMemMapList = List(
-      //     Base address      Top address       Width  Description    Mode (RWXIDSAC)
-      MemMap("h00_0000_0000", "h00_0FFF_FFFF",   "h0", "Reserved",    "RW"),
-      MemMap("h00_1000_0000", "h00_1FFF_FFFF",   "h0", "QSPI_Flash",  "RWX"),
-      MemMap("h00_2000_0000", "h00_2FFF_FFFF",   "h0", "Reserved",    "RW"),
-      MemMap("h00_3000_0000", "h00_3000_FFFF",   "h0", "DMA",         "RW"),
-      MemMap("h00_3001_0000", "h00_3004_FFFF",   "h0", "GPU",         "RWC"),
-      MemMap("h00_3005_0000", "h00_3006_FFFF",   "h0", "USB/SDMMC",   "RW"),
-      MemMap("h00_3007_0000", "h00_30FF_FFFF",   "h0", "Reserved",    "RW"),
-      MemMap("h00_3100_0000", "h00_3111_FFFF",   "h0", "MMIO",        "RW"),
-      MemMap("h00_3112_0000", "h00_37FF_FFFF",   "h0", "Reserved",    "RW"),
-      MemMap("h00_3800_0000", "h00_3800_FFFF",   "h0", "CLINT",       "RW"),
-      MemMap("h00_3801_0000", "h00_3801_FFFF",   "h0", "BEU",         "RW"),
-      MemMap("h00_3802_0000", "h00_3802_0FFF",   "h0", "DebugModule", "RWX"),
-      MemMap("h00_3802_1000", "h00_3802_1FFF",   "h0", "MMPMA",       "RW"),
-      MemMap("h00_3802_2000", "h00_3900_0000",   "h0", "Reserved",    ""),
-      MemMap("h00_3900_0000", "h00_3900_1FFF",   "h0", "L3CacheCtrl",  "RW"),
-      MemMap("h00_3900_2000", "h00_39FF_FFFF",   "h0", "Reserved",    ""),
-      MemMap("h00_3A00_0000", "h00_3A00_0FFF",   "h0", "PLL0",        "RW),
-      MemMap('h00_3A00_1000", "h00_3BFF_FFFF",   "h0", "Reserved",    ""),
-      MemMap("h00_3C00_0000", "h00_3FFF_FFFF",   "h0", "PLIC",        "RW"),
-      MemMap("h00_4000_0000", "h00_7FFF_FFFF",   "h0", "PCIe",        "RW"),
-      MemMap("h00_8000_0000", "h0F_FFFF_FFFF",   "h0", "DDR",         "RWXIDSA"),
-    )
+   * from  CPU
+   * BASE            TOP             Size   Description     Attribute
+   * 0x00_0000_0000  0x00_0FFF_FFFF         Reserved
+   * 0x00_1000_0000  0x00_1FFF_FFFF  256MB  QSPI Flash      RX
+   * 0x00_2000_0000  0x00_2FFF_FFFF         Reserved
+   * 0x00_3000_0000  0x00_3000_FFFF  64KB   GPU(V550)       RW
+   * 0x00_3001_0000  0x00_3001_FFFF  64KB   G71             RW
+   * 0x00_3002_0000  0x00_3003_FFFF         Reserved
+   * 0x00_3004_0000  0x00_3004_FFFF  64KB   DMA             RW
+   * 0x00_3005_0000  0x00_3005_FFFF  64KB   SDMMC           RW
+   * 0x00_3006_0000  0x00_3015_FFFF  1MB    USB             RW
+   * 0x00_3016_0000  0x00_3025_FFFF  1MB    DATA_CPU_BRIDGE RW
+   * 0x00_3026_0000  0x00_30FF_FFFF         Reserved
+   * 0x00_3100_0000  0x00_3100_FFFF  64KB   QSPI            RW
+   * 0x00_3101_0000  0x00_3101_FFFF  64KB   GMAC            RW
+   * 0x00_3102_0000  0x00_3102_FFFF  64KB   HDMI            RW
+   * 0x00_3103_0000  0x00_3103_FFFF  64KB   HDMI_PHY        RW
+   * 0x00_3104_0000  0x00_3105_FFFF  128KB  DP              RW
+   * 0x00_3106_0000  0x00_3106_FFFF  64KB   DDR0            RW
+   * 0x00_3107_0000  0x00_3107_FFFF  64KB   DDR0_PHY        RW
+   * 0x00_3108_0000  0x00_3108_FFFF  64KB   DDR1            RW
+   * 0x00_3109_0000  0x00_3109_FFFF  64KB   DDR1_PHY        RW
+   * 0x00_310A_0000  0x00_310A_FFFF  64KB   IIS             RW
+   * 0x00_310B_0000  0x00_310B_FFFF  64KB   UART0           RW
+   * 0x00_310C_0000  0x00_310C_FFFF  64KB   UART1           RW
+   * 0x00_310D_0000  0x00_310D_FFFF  64KB   UART2           RW
+   * 0x00_310E_0000  0x00_310E_FFFF  64KB   IIC0            RW
+   * 0x00_310F_0000  0x00_310F_FFFF  64KB   IIC1            RW
+   * 0x00_3110_0000  0x00_3110_FFFF  64KB   IIC2            RW
+   * 0x00_3111_0000  0x00_3111_FFFF  64KB   GPIO            RW
+   * 0x00_3112_0000  0x00_3112_FFFF  64KB   CRU             RW
+   * 0x00_3113_0000  0x00_3113_FFFF  64KB   WDT             RW
+   * 0x00_3114_0000  0x00_3114_FFFF  64KB   USB2_PHY0       RW
+   * 0x00_3115_0000  0x00_3115_FFFF  64KB   USB2_PHY1       RW
+   * 0x00_3116_0000  0x00_3116_FFFF  64KB   USB2_PHY2       RW
+   * 0x00_3117_0000  0x00_3117_FFFF  64KB   USB2_PHY3       RW
+   * 0x00_3118_0000  0x00_3118_FFFF  64KB   USB3_PHY0       RW
+   * 0x00_3119_0000  0x00_3119_FFFF  64KB   USB3_PHY1       RW
+   * 0x00_311a_0000  0x00_311a_FFFF  64KB   USB3_PHY2       RW
+   * 0x00_311b_0000  0x00_311b_FFFF  64KB   USB3_PHY3       RW
+   * 0x00_311c_0000  0x00_311c_FFFF  64KB   PCIE0_CFG       RW
+   * 0x00_311d_0000  0x00_311d_FFFF  64KB   PCIE1_CFG       RW
+   * 0x00_311e_0000  0x00_311e_FFFF  64KB   PCIE2_CFG       RW
+   * 0x00_311f_0000  0x00_311f_FFFF  64KB   PCIE3_CFG       RW
+   * 0x00_3120_0000  0x00_3120_FFFF  64KB   SYSCFG          RW
+   * 0x00_3121_0000  0x00_3130_FFFF  1MB    DATA_CPU_BRIDGE RW
+   * 0x00_3131_0000  0x00_37FF_FFFF         Reserved
+   * 0x00_3800_0000  0x00_3800_FFFF  64KB   CLINT (In cpu)  RW
+   * 0x00_3801_0000  0x00_3801_FFFF         Reserved
+   * 0x00_3802_0000  0x00_3802_0FFF  4KB    Debug (In cpu)  RW
+   * 0x00_3802_1000  0x00_38FF_FFFF         Reserved
+   * 0x00_3900_0000  0x00_3900_0FFF  4KB    CacheCtrl       RW
+   * 0x00_3900_1000  0x00_3900_1FFF  4KB    Core Reset      RW
+   * 0x00_3900_2000  0x00_3BFF_FFFF         Reserved
+   * 0x00_3C00_0000  0x00_3FFF_FFFF         PLIC (In cpu)   RW
+   * 0x00_4000_0000  0x00_4FFF_FFFF  256MB  PCIe0           RW
+   * 0x00_5000_0000  0x00_5FFF_FFFF  256MB  PCIe1           RW
+   * 0x00_6000_0000  0x00_6FFF_FFFF  256MB  PCIe2           RW
+   * 0x00_7000_0000  0x00_7FFF_FFFF  256MB  PCIe3           RW
+   * 0x00_8000_0000  0x1F_FFFF_FFFF  126GB  DDR             RWXIDSA
    */
 
   def pma_init() : (Vec[UInt], Vec[UInt], Vec[UInt]) = {
-    // the init value is zero
-    // from 0 to num(default 16) - 1, lower priority
-    // according to simple map, 9 entries is needed, pick 6-14, leave 0-5 & 15 unusedcfgMerged.map(_ := 0.U)
+    def genAddr(init_addr: BigInt) = {
+      init_addr.U((PMPAddrBits - PMPOffBits).W)
+    }
+    def genMask(init_addr: BigInt, a: BigInt) = {
+      val match_mask_addr = (init_addr << 1) | (a & 0x1) | (((1 << PlatformGrain) - 1) >> PMPOffBits)
+      val mask = ((match_mask_addr & ~(match_mask_addr + 1)) << PMPOffBits) | ((1 << PMPOffBits) - 1)
+      mask.U(PMPAddrBits.W)
+    }
 
     val num = NumPMA
     require(num >= 16)
-    val cfg = WireInit(0.U.asTypeOf(Vec(num, new PMPConfig())))
 
-    val addr = Wire(Vec(num, UInt((PMPAddrBits-PMPOffBits).W)))
-    val mask = Wire(Vec(num, UInt(PMPAddrBits.W)))
-    addr := DontCare
-    mask := DontCare
+    val cfg_list = ListBuffer[UInt]()
+    val addr_list = ListBuffer[UInt]()
+    val mask_list = ListBuffer[UInt]()
+    def addPMA(base_addr: BigInt,
+               range: BigInt = 0L, // only use for napot mode
+               l: Boolean = false,
+               c: Boolean = false,
+               atomic: Boolean = false,
+               a: Int = 0,
+               x: Boolean = false,
+               w: Boolean = false,
+               r: Boolean = false) = {
+      val addr = if (a < 2) { shift_addr(base_addr) }
+        else { get_napot(base_addr, range) }
+      cfg_list.append(PMPConfigUInt(l, c, atomic, a, x, w, r))
+      addr_list.append(genAddr(addr))
+      mask_list.append(genMask(addr, a))
+    }
 
-    var idx = num-1
+    addPMA(0x480000000L, c = true, atomic = true, a = 1, x = true, w = true, r = true)
+    addPMA(0x80000000L, a = 1, w = true, r = true)
+    addPMA(0x3c000000L, a = 1)
+    addPMA(0x39002000L, a = 1, w = true, r = true)
+    addPMA(0x39000000L, a = 1)
+    addPMA(0x38021000L, a = 1, w = true, r = true, x = true)
+    addPMA(0x38020000L, a = 1)
+    addPMA(0x38010000L, a = 1, w = true, r = true)
+    addPMA(0x38000000L, a = 1)
+    addPMA(0x31310000L, a = 1, w = true, r = true)
+    addPMA(0x30000000L, a = 1)
+    addPMA(0x20000000L, a = 1, x = true, r = true)
+    addPMA(0x10000000L, a = 1)
+    addPMA(0)
+    while (cfg_list.length < 16) {
+      addPMA(0)
+    }
 
-    // TODO: turn to napot to save entries
-    // use tor instead of napot, for napot may be confusing and hard to understand
-    // NOTE: all the addr space are default set to DDR, RWXCA
-    idx = idx - 1
-    addr(idx) := shift_addr(0xFFFFFFFFFL) // all the addr are default ddr, whicn means rwxca
-    cfg(idx).a := 3.U; cfg(idx).r := true.B; cfg(idx).w := true.B; cfg(idx).x := true.B; cfg(idx).c := true.B; cfg(idx).atomic := true.B
-    mask(idx) := match_mask(addr(idx), cfg(idx))
-    idx = idx - 1
-
-    // NOTE: (0x0_0000_0000L, 0x0_8000_0000L) are default set to MMIO, only RW
-    addr(idx) := get_napot(0x00000000L, 0x80000000L)
-    cfg(idx).a := 3.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    mask(idx) := match_mask(addr(idx), cfg(idx))
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x3C000000)
-    cfg(idx).a := 1.U
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x3A001000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x3A000000)
-    cfg(idx).a := 1.U
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x39002000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x39000000)
-    cfg(idx).a := 1.U
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x38022000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x38021000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B; cfg(idx).x := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr(0x38020000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr( 0x30050000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr( 0x30010000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr( 0x20000000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B; cfg(idx).x := true.B
-    idx = idx - 1
-
-    addr(idx) := shift_addr( 0x10000000)
-    cfg(idx).a := 1.U; cfg(idx).r := true.B; cfg(idx).w := true.B
-    idx = idx - 1
-    
-    require(idx >= 0)
-    addr(idx) := shift_addr(0)
-
-    val cfgInitMerge = cfg.asTypeOf(Vec(num/8, UInt(PMXLEN.W)))
-    (cfgInitMerge, addr, mask)
+    val cfgInitMerge = Seq.tabulate(num / 8)(i => {
+      cfg_list.reverse.drop(8 * i).take(8).foldRight(BigInt(0L)) { case (a, result) =>
+        (result << a.getWidth) | a.litValue
+      }.U(PMXLEN.W)
+    })
+    val addr = addr_list.reverse
+    val mask = mask_list.reverse
+    (VecInit(cfgInitMerge), VecInit(addr), VecInit(mask))
   }
 
-  def get_napot(base: BigInt, range: BigInt) = {
+  def get_napot(base: BigInt, range: BigInt): BigInt = {
     val PlatformGrainBytes = (1 << PlatformGrain)
     if ((base % PlatformGrainBytes) != 0) {
       println("base:%x", base)
@@ -216,7 +228,7 @@ trait PMAMethod extends PMAConst {
     require((base % PlatformGrainBytes) == 0)
     require((range % PlatformGrainBytes) == 0)
 
-    ((base + (range/2 - 1)) >> PMPOffBits).U
+    ((base + (range/2 - 1)) >> PMPOffBits)
   }
 
   def match_mask(paddr: UInt, cfg: PMPConfig) = {
@@ -225,7 +237,7 @@ trait PMAMethod extends PMAConst {
   }
 
   def shift_addr(addr: BigInt) = {
-    (addr >> 2).U
+    addr >> 2
   }
 }
 
@@ -275,7 +287,7 @@ trait PMACheckMethod extends PMPConst {
     match_vec(num) := true.B
     cfg_vec(num) := pmaDefault
     if (leaveHitMux) {
-      ParallelPriorityMux(match_vec.map(RegEnable(_, false.B, valid)), RegEnable(cfg_vec, valid))
+      ParallelPriorityMux(match_vec.map(RegEnable(_, init = false.B, valid)), RegEnable(cfg_vec, valid))
     } else {
       ParallelPriorityMux(match_vec, cfg_vec)
     }

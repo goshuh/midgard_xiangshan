@@ -23,13 +23,15 @@ import xiangshan.backend.exu._
 import xiangshan.backend.dispatch.DispatchParameters
 import xiangshan.cache.DCacheParameters
 import xiangshan.cache.prefetch._
-import xiangshan.frontend.{BIM, BasePredictor, BranchPredictionResp, FTB, FakePredictor, MicroBTB, RAS, Tage, ITTage, Tage_SC}
+import xiangshan.frontend.{BasePredictor, BranchPredictionResp, FTB, FakePredictor, RAS, Tage, ITTage, Tage_SC, FauFTB}
 import xiangshan.frontend.icache.ICacheParameters
 import xiangshan.cache.mmu.{L2TLBParameters, TLBParameters}
 import freechips.rocketchip.diplomacy.AddressSet
 import system.SoCParamsKey
 import huancun._
 import huancun.debug._
+import xiangshan.mem.prefetch.{PrefetcherParams, SMSParams}
+
 import scala.math.min
 
 case object XSTileKey extends Field[Seq[XSCoreParameters]]
@@ -60,7 +62,7 @@ case class XSCoreParameters
   EnableSC: Boolean = true,
   EnbaleTlbDebug: Boolean = false,
   EnableJal: Boolean = false,
-  EnableUBTB: Boolean = true,
+  EnableFauFTB: Boolean = true,
   UbtbGHRLength: Int = 4,
   // HistoryLength: Int = 512,
   EnableGHistDiff: Boolean = true,
@@ -97,20 +99,12 @@ case class XSCoreParameters
   numBr: Int = 2,
   branchPredictor: Function2[BranchPredictionResp, Parameters, Tuple2[Seq[BasePredictor], BranchPredictionResp]] =
     ((resp_in: BranchPredictionResp, p: Parameters) => {
-      // val loop = Module(new LoopPredictor)
-      // val tage = (if(EnableBPD) { if (EnableSC) Module(new Tage_SC)
-      //                             else          Module(new Tage) }
-      //             else          { Module(new FakeTage) })
       val ftb = Module(new FTB()(p))
-      val ubtb = Module(new MicroBTB()(p))
+      val ubtb =Module(new FauFTB()(p))
       // val bim = Module(new BIM()(p))
       val tage = Module(new Tage_SC()(p))
       val ras = Module(new RAS()(p))
       val ittage = Module(new ITTage()(p))
-      // val tage = Module(new Tage()(p))
-      // val fake = Module(new FakePredictor()(p))
-
-      // val preds = Seq(loop, tage, btb, ubtb, bim)
       val preds = Seq(ubtb, tage, ftb, ittage, ras)
       preds.map(_.io := DontCare)
 
@@ -120,12 +114,12 @@ case class XSCoreParameters
       // tage.io.resp_in(0)  := btb.io.resp
       // loop.io.resp_in(0)  := tage.io.resp
       ubtb.io.in.bits.resp_in(0) := resp_in
-      tage.io.in.bits.resp_in(0) := ubtb.io.out.resp
-      ftb.io.in.bits.resp_in(0)  := tage.io.out.resp
-      ittage.io.in.bits.resp_in(0)  := ftb.io.out.resp
-      ras.io.in.bits.resp_in(0) := ittage.io.out.resp
+      tage.io.in.bits.resp_in(0) := ubtb.io.out
+      ftb.io.in.bits.resp_in(0)  := tage.io.out
+      ittage.io.in.bits.resp_in(0)  := ftb.io.out
+      ras.io.in.bits.resp_in(0) := ittage.io.out
 
-      (preds, ras.io.out.resp)
+      (preds, ras.io.out)
     }),
   IBufSize: Int = 48,
   DecodeWidth: Int = 6,
@@ -136,7 +130,9 @@ case class XSCoreParameters
   IssQueSize: Int = 16,
   NRPhyRegs: Int = 192,
   LoadQueueSize: Int = 80,
+  LoadQueueNWriteBanks: Int = 8,
   StoreQueueSize: Int = 64,
+  StoreQueueNWriteBanks: Int = 8,
   RobSize: Int = 256,
   dpParams: DispatchParameters = DispatchParameters(
     IntDqSize = 16,
@@ -157,26 +153,30 @@ case class XSCoreParameters
     LduCnt = 2,
     StuCnt = 2
   ),
+  prefetcher: Option[PrefetcherParams] = Some(SMSParams()),
   LoadPipelineWidth: Int = 2,
   StorePipelineWidth: Int = 2,
   StoreBufferSize: Int = 16,
   StoreBufferThreshold: Int = 7,
-  EnsbufferWidth: Int = 2,
   EnableLoadToLoadForward: Boolean = true,
   EnableFastForward: Boolean = false,
   EnableLdVioCheckAfterReset: Boolean = true,
   EnableSoftPrefetchAfterReset: Boolean = true,
   EnableCacheErrorAfterReset: Boolean = true,
+  EnablePTWPreferCache: Boolean = true,
   EnableAccurateLoadError: Boolean = true,
   MMUAsidLen: Int = 16, // max is 16, 0 is not supported now
   itlbParameters: TLBParameters = TLBParameters(
     name = "itlb",
     fetchi = true,
     useDmode = false,
+    sameCycle = false,
+    missSameCycle = true,
     normalNWays = 32,
     normalReplacer = Some("plru"),
     superNWays = 4,
-    superReplacer = Some("plru")
+    superReplacer = Some("plru"),
+    shouldBlock = true
   ),
   ldtlbParameters: TLBParameters = TLBParameters(
     name = "ldtlb",
@@ -188,7 +188,6 @@ case class XSCoreParameters
     normalAsVictim = true,
     outReplace = false,
     partialStaticPMP = true,
-    outsideRecvFlush = true,
     saveLevel = true
   ),
   sttlbParameters: TLBParameters = TLBParameters(
@@ -201,7 +200,6 @@ case class XSCoreParameters
     normalAsVictim = true,
     outReplace = false,
     partialStaticPMP = true,
-    outsideRecvFlush = true,
     saveLevel = true
   ),
   refillBothTlb: Boolean = false,
@@ -214,8 +212,8 @@ case class XSCoreParameters
   l2tlbParameters: L2TLBParameters = L2TLBParameters(),
   NumPerfCounters: Int = 16,
   icacheParameters: ICacheParameters = ICacheParameters(
-    tagECC = Some("parity"),
-    dataECC = Some("parity"),
+    tagECC = None,
+    dataECC = None,
     replacer = Some("setplru"),
     nMissEntries = 2,
     nProbeEntries = 2,
@@ -235,7 +233,7 @@ case class XSCoreParameters
     level = 2,
     ways = 8,
     sets = 1024, // default 512KB L2
-    prefetch = Some(huancun.prefetch.BOPParameters())
+    prefetch = Some(huancun.prefetch.PrefetchReceiverParams())
   )),
   L2NBanks: Int = 1,
   usePTWRepeater: Boolean = false,
@@ -312,6 +310,7 @@ trait HasXSParameter {
   val EnableGHistDiff = coreParams.EnableGHistDiff
   val UbtbGHRLength = coreParams.UbtbGHRLength
   val UbtbSize = coreParams.UbtbSize
+  val EnableFauFTB = coreParams.EnableFauFTB
   val FtbSize = coreParams.FtbSize
   val FtbWays = coreParams.FtbWays
   val RasSize = coreParams.RasSize
@@ -371,7 +370,9 @@ trait HasXSParameter {
   val RobSize = coreParams.RobSize
   val IntRefCounterWidth = log2Ceil(RobSize)
   val LoadQueueSize = coreParams.LoadQueueSize
+  val LoadQueueNWriteBanks = coreParams.LoadQueueNWriteBanks
   val StoreQueueSize = coreParams.StoreQueueSize
+  val StoreQueueNWriteBanks = coreParams.StoreQueueNWriteBanks
   val dpParams = coreParams.dpParams
   val exuParameters = coreParams.exuParameters
   val NRMemReadPorts = exuParameters.LduCnt + 2 * exuParameters.StuCnt
@@ -383,18 +384,19 @@ trait HasXSParameter {
   val StorePipelineWidth = coreParams.StorePipelineWidth
   val StoreBufferSize = coreParams.StoreBufferSize
   val StoreBufferThreshold = coreParams.StoreBufferThreshold
-  val EnsbufferWidth = coreParams.EnsbufferWidth
   val EnableLoadToLoadForward = coreParams.EnableLoadToLoadForward
   val EnableFastForward = coreParams.EnableFastForward
   val EnableLdVioCheckAfterReset = coreParams.EnableLdVioCheckAfterReset
   val EnableSoftPrefetchAfterReset = coreParams.EnableSoftPrefetchAfterReset
   val EnableCacheErrorAfterReset = coreParams.EnableCacheErrorAfterReset
+  val EnablePTWPreferCache = coreParams.EnablePTWPreferCache
   val EnableAccurateLoadError = coreParams.EnableAccurateLoadError
   val asidLen = coreParams.MMUAsidLen
   val BTLBWidth = coreParams.LoadPipelineWidth + coreParams.StorePipelineWidth
   val refillBothTlb = coreParams.refillBothTlb
   val itlbParams = coreParams.itlbParameters
   val ldtlbParams = coreParams.ldtlbParameters
+  val ld_tlb_ports = if(coreParams.prefetcher.nonEmpty) 3 else 2
   val sttlbParams = coreParams.sttlbParameters
   val btlbParams = coreParams.btlbParameters
   val l2tlbParams = coreParams.l2tlbParameters
@@ -403,7 +405,7 @@ trait HasXSParameter {
   val NumRs = (exuParameters.JmpCnt+1)/2 + (exuParameters.AluCnt+1)/2 + (exuParameters.MulCnt+1)/2 +
               (exuParameters.MduCnt+1)/2 + (exuParameters.FmacCnt+1)/2 +  + (exuParameters.FmiscCnt+1)/2 +
               (exuParameters.FmiscDivSqrtCnt+1)/2 + (exuParameters.LduCnt+1)/2 +
-              (exuParameters.StuCnt+1)/2 + (exuParameters.StuCnt+1)/2
+              ((exuParameters.StuCnt+1)/2) + ((exuParameters.StuCnt+1)/2)
 
   val instBytes = if (HasCExtension) 2 else 4
   val instOffsetBits = log2Ceil(instBytes)
@@ -451,4 +453,8 @@ trait HasXSParameter {
   val numCSRPCntCtrl     = 8
   val numCSRPCntLsu      = 8
   val numCSRPCntHc       = 5
+  val printEventCoding   = true
+  // Parameters for Sdtrig extension
+  protected val TriggerNum = 10
+  protected val TriggerChainMaxLength = 2
 }

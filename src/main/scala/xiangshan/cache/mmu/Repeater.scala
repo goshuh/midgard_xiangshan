@@ -44,17 +44,17 @@ class PTWReapterIO(Width: Int)(implicit p: Parameters) extends MMUIOBaseBundle {
 
 }
 
-class PTWRepeater(Width: Int = 1, FenceDelay: Int)(implicit p: Parameters) extends XSModule with HasPtwConst {
+class PTWRepeater(Width: Int = 1)(implicit p: Parameters) extends XSModule with HasPtwConst {
   val io = IO(new PTWReapterIO(Width))
 
   val req_in = if (Width == 1) {
     io.tlb.req(0)
   } else {
-    val arb = Module(new RRArbiter(io.tlb.req(0).bits.cloneType, Width))
+    val arb = Module(new RRArbiterInit(io.tlb.req(0).bits.cloneType, Width))
     arb.io.in <> io.tlb.req
     arb.io.out
   }
-  val (tlb, ptw, flush) = (io.tlb, io.ptw, DelayN(io.sfence.valid || io.csr.satp_changed, FenceDelay))
+  val (tlb, ptw, flush) = (io.tlb, io.ptw, DelayN(io.sfence.valid || io.csr.satp_changed, 2))
   val req = RegEnable(req_in.bits, req_in.fire())
   val resp = RegEnable(ptw.resp.bits, ptw.resp.fire())
   val haveOne = BoolStopWatch(req_in.fire(), tlb.resp.fire() || flush)
@@ -87,17 +87,17 @@ class PTWRepeater(Width: Int = 1, FenceDelay: Int)(implicit p: Parameters) exten
  *
  */
 
-class PTWRepeaterNB(Width: Int = 1, passReady: Boolean = false, FenceDelay: Int)(implicit p: Parameters) extends XSModule with HasPtwConst {
+class PTWRepeaterNB(Width: Int = 1, passReady: Boolean = false)(implicit p: Parameters) extends XSModule with HasPtwConst {
   val io = IO(new PTWReapterIO(Width))
 
   val req_in = if (Width == 1) {
     io.tlb.req(0)
   } else {
-    val arb = Module(new RRArbiter(io.tlb.req(0).bits.cloneType, Width))
+    val arb = Module(new RRArbiterInit(io.tlb.req(0).bits.cloneType, Width))
     arb.io.in <> io.tlb.req
     arb.io.out
   }
-  val (tlb, ptw, flush) = (io.tlb, io.ptw, DelayN(io.sfence.valid || io.csr.satp_changed, FenceDelay))
+  val (tlb, ptw, flush) = (io.tlb, io.ptw, DelayN(io.sfence.valid || io.csr.satp_changed, 2))
   /* sent: tlb -> repeater -> ptw
    * recv: ptw -> repeater -> tlb
    * different from PTWRepeater
@@ -130,17 +130,17 @@ class PTWRepeaterNB(Width: Int = 1, passReady: Boolean = false, FenceDelay: Int)
 }
 
 class PTWFilterIO(Width: Int)(implicit p: Parameters) extends MMUIOBaseBundle {
-  val tlb = Flipped(new VectorTlbPtwIO(Width))
+  val tlb = Flipped(new BTlbPtwIO(Width))
   val ptw = new TlbPtwIO()
 
-  def apply(tlb: VectorTlbPtwIO, ptw: TlbPtwIO, sfence: SfenceBundle, csr: TlbCsrBundle): Unit = {
+  def apply(tlb: BTlbPtwIO, ptw: TlbPtwIO, sfence: SfenceBundle, csr: TlbCsrBundle): Unit = {
     this.tlb <> tlb
     this.ptw <> ptw
     this.sfence <> sfence
     this.csr <> csr
   }
 
-  def apply(tlb: VectorTlbPtwIO, sfence: SfenceBundle, csr: TlbCsrBundle): Unit = {
+  def apply(tlb: BTlbPtwIO, sfence: SfenceBundle, csr: TlbCsrBundle): Unit = {
     this.tlb <> tlb
     this.sfence <> sfence
     this.csr <> csr
@@ -148,7 +148,7 @@ class PTWFilterIO(Width: Int)(implicit p: Parameters) extends MMUIOBaseBundle {
 
 }
 
-class PTWFilter(Width: Int, Size: Int, FenceDelay: Int)(implicit p: Parameters) extends XSModule with HasPtwConst {
+class PTWFilter(Width: Int, Size: Int)(implicit p: Parameters) extends XSModule with HasPtwConst {
   require(Size >= Width)
 
   val io = IO(new PTWFilterIO(Width))
@@ -163,8 +163,8 @@ class PTWFilter(Width: Int, Size: Int, FenceDelay: Int)(implicit p: Parameters) 
   val mayFullIss = RegInit(false.B)
   val counter = RegInit(0.U(log2Up(Size+1).W))
 
-  val flush = DelayN(io.sfence.valid || io.csr.satp_changed, FenceDelay)
-  val tlb_req = WireInit(io.tlb.req) // NOTE: tlb_req is not io.tlb.req, see below codes, just use cloneType
+  val flush = DelayN(io.sfence.valid || io.csr.satp_changed, 2)
+  val tlb_req = WireInit(io.tlb.req)
   tlb_req.suggestName("tlb_req")
 
   val inflight_counter = RegInit(0.U(log2Up(Size + 1).W))
@@ -173,13 +173,12 @@ class PTWFilter(Width: Int, Size: Int, FenceDelay: Int)(implicit p: Parameters) 
     inflight_counter := Mux(io.ptw.req(0).fire(), inflight_counter + 1.U, inflight_counter - 1.U)
   }
 
-  val canEnqueue = Wire(Bool()) // NOTE: actually enqueue
   val ptwResp = RegEnable(io.ptw.resp.bits, io.ptw.resp.fire())
   val ptwResp_OldMatchVec = vpn.zip(v).map{ case (pi, vi) =>
     vi && io.ptw.resp.bits.entry.hit(pi, io.csr.satp.asid, true, true)}
   val ptwResp_valid = RegNext(io.ptw.resp.fire() && Cat(ptwResp_OldMatchVec).orR, init = false.B)
   val oldMatchVec_early = io.tlb.req.map(a => vpn.zip(v).map{ case (pi, vi) => vi && pi === a.bits.vpn})
-  val lastReqMatchVec_early = io.tlb.req.map(a => tlb_req.map{ b => b.valid && b.bits.vpn === a.bits.vpn && canEnqueue})
+  val lastReqMatchVec_early = io.tlb.req.map(a => tlb_req.map{ b => b.valid && b.bits.vpn === a.bits.vpn})
   val newMatchVec_early = io.tlb.req.map(a => io.tlb.req.map(b => a.bits.vpn === b.bits.vpn))
 
   (0 until Width) foreach { i =>
@@ -228,17 +227,12 @@ class PTWFilter(Width: Int, Size: Int, FenceDelay: Int)(implicit p: Parameters) 
   val enqPtrVecInit = VecInit((0 until Width).map(i => enqPtr + i.U))
   val enqPtrVec = VecInit((0 until Width).map(i => enqPtrVecInit(accumEnqNum(i))))
   val enqNum = PopCount(reqs.map(_.valid))
-  canEnqueue := counter +& enqNum <= Size.U
-
-  // the req may recv false ready, but actually received. Filter and TLB will handle it.
-  val enqNum_fake = PopCount(io.tlb.req.map(_.valid))
-  val canEnqueue_fake = counter +& enqNum_fake <= Size.U
-  io.tlb.req.map(_.ready := canEnqueue_fake) // NOTE: just drop un-fire reqs
-
+  val canEnqueue = counter +& enqNum <= Size.U
   // tlb req flushed by ptw resp: last ptw resp && current ptw resp
   // the flushed tlb req will fakely enq, with a false valid
   val tlb_req_flushed = reqs.map(a => io.ptw.resp.valid && io.ptw.resp.bits.entry.hit(a.bits.vpn, 0.U, true, true))
 
+  io.tlb.req.map(_.ready := true.B) // NOTE: just drop un-fire reqs
   io.tlb.resp.valid := ptwResp_valid
   io.tlb.resp.bits.data := ptwResp
   io.tlb.resp.bits.vector := resp_vector
@@ -331,77 +325,77 @@ class PTWFilter(Width: Int, Size: Int, FenceDelay: Int)(implicit p: Parameters) 
 }
 
 object PTWRepeater {
-  def apply(fenceDelay: Int,
+  def apply(
     tlb: TlbPtwIO,
     sfence: SfenceBundle,
     csr: TlbCsrBundle
   )(implicit p: Parameters) = {
     val width = tlb.req.size
-    val repeater = Module(new PTWRepeater(width, fenceDelay))
+    val repeater = Module(new PTWRepeater(width))
     repeater.io.apply(tlb, sfence, csr)
     repeater
   }
 
-  def apply(fenceDelay: Int,
+  def apply(
     tlb: TlbPtwIO,
     ptw: TlbPtwIO,
     sfence: SfenceBundle,
     csr: TlbCsrBundle
   )(implicit p: Parameters) = {
     val width = tlb.req.size
-    val repeater = Module(new PTWRepeater(width, fenceDelay))
+    val repeater = Module(new PTWRepeater(width))
     repeater.io.apply(tlb, ptw, sfence, csr)
     repeater
   }
 }
 
 object PTWRepeaterNB {
-  def apply(passReady: Boolean, fenceDelay: Int,
+  def apply(passReady: Boolean,
     tlb: TlbPtwIO,
     sfence: SfenceBundle,
     csr: TlbCsrBundle
   )(implicit p: Parameters) = {
     val width = tlb.req.size
-    val repeater = Module(new PTWRepeaterNB(width, passReady,fenceDelay))
+    val repeater = Module(new PTWRepeaterNB(width, passReady))
     repeater.io.apply(tlb, sfence, csr)
     repeater
   }
 
-  def apply(passReady: Boolean, fenceDelay: Int,
+  def apply(passReady: Boolean,
     tlb: TlbPtwIO,
     ptw: TlbPtwIO,
     sfence: SfenceBundle,
     csr: TlbCsrBundle
   )(implicit p: Parameters) = {
     val width = tlb.req.size
-    val repeater = Module(new PTWRepeaterNB(width, passReady, fenceDelay))
+    val repeater = Module(new PTWRepeaterNB(width, passReady))
     repeater.io.apply(tlb, ptw, sfence, csr)
     repeater
   }
 }
 
 object PTWFilter {
-  def apply(fenceDelay: Int,
-    tlb: VectorTlbPtwIO,
+  def apply(
+    tlb: BTlbPtwIO,
     ptw: TlbPtwIO,
     sfence: SfenceBundle,
     csr: TlbCsrBundle,
     size: Int
   )(implicit p: Parameters) = {
     val width = tlb.req.size
-    val filter = Module(new PTWFilter(width, size, fenceDelay))
+    val filter = Module(new PTWFilter(width, size))
     filter.io.apply(tlb, ptw, sfence, csr)
     filter
   }
 
-  def apply(fenceDelay: Int,
-    tlb: VectorTlbPtwIO,
+  def apply(
+    tlb: BTlbPtwIO,
     sfence: SfenceBundle,
     csr: TlbCsrBundle,
     size: Int
   )(implicit p: Parameters) = {
     val width = tlb.req.size
-    val filter = Module(new PTWFilter(width, size, fenceDelay))
+    val filter = Module(new PTWFilter(width, size))
     filter.io.apply(tlb, sfence, csr)
     filter
   }

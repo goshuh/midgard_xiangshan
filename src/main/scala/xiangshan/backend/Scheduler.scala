@@ -178,12 +178,9 @@ class Scheduler(
   val numIssuePorts = configs.map(_._2).sum
   val numReplayPorts = reservationStations.filter(_.params.hasFeedback == true).map(_.params.numDeq).sum
   val memRsEntries = reservationStations.filter(_.params.hasFeedback == true).map(_.params.numEntries)
-  val memRsNum = reservationStations.filter(_.params.hasFeedback == true).map(_.numRS)
   val getMemRsEntries = {
     require(memRsEntries.isEmpty || memRsEntries.max == memRsEntries.min, "different indexes not supported")
-    require(memRsNum.isEmpty || memRsNum.max == memRsNum.min, "different num not supported")
-    require(memRsNum.isEmpty || memRsNum.min != 0, "at least 1 memRs required")
-    if (memRsEntries.isEmpty) 0 else (memRsEntries.max / memRsNum.max)
+    if (memRsEntries.isEmpty) 0 else memRsEntries.max
   }
   val numSTDPorts = reservationStations.filter(_.params.exuCfg.get == StdExeUnitCfg).map(_.params.numDeq).sum
 
@@ -243,11 +240,11 @@ class SchedulerImp(outer: Scheduler) extends LazyModuleImp(outer) with HasXSPara
     // special ports for RS that needs to read from other schedulers
     // In: read response from other schedulers
     // Out: read request to other schedulers
-    val intRfReadIn = if (!outer.hasIntRf && outer.numIntRfReadPorts > 0) Some(Vec(outer.numIntRfReadPorts, Flipped(new RfReadPort(XLEN)))) else None
-    val intRfReadOut = if (outer.outIntRfReadPorts > 0) Some(Vec(outer.outIntRfReadPorts, new RfReadPort(XLEN))) else None
-    val fpRfReadIn = if (!outer.hasFpRf && outer.numFpRfReadPorts > 0) Some(Vec(outer.numFpRfReadPorts, Flipped(new RfReadPort(XLEN)))) else None
+    val intRfReadIn = if (!outer.hasIntRf && outer.numIntRfReadPorts > 0) Some(Vec(outer.numIntRfReadPorts, Flipped(new RfReadPort(NRPhyRegs, XLEN)))) else None
+    val intRfReadOut = if (outer.outIntRfReadPorts > 0) Some(Vec(outer.outIntRfReadPorts, new RfReadPort(NRPhyRegs, XLEN))) else None
+    val fpRfReadIn = if (!outer.hasFpRf && outer.numFpRfReadPorts > 0) Some(Vec(outer.numFpRfReadPorts, Flipped(new RfReadPort(NRPhyRegs, XLEN)))) else None
     val fpStateReadIn = if (!outer.hasFpRf && outer.numFpRfReadPorts > 0) Some(Vec(outer.numFpRfReadPorts, Flipped(new BusyTableReadIO))) else None
-    val fpRfReadOut = if (outer.outFpRfReadPorts > 0) Some(Vec(outer.outFpRfReadPorts, new RfReadPort(XLEN))) else None
+    val fpRfReadOut = if (outer.outFpRfReadPorts > 0) Some(Vec(outer.outFpRfReadPorts, new RfReadPort(NRPhyRegs, XLEN))) else None
     val fpStateReadOut = if (outer.outFpRfReadPorts > 0) Some(Vec(outer.outFpRfReadPorts, new BusyTableReadIO)) else None
     val loadFastMatch = if (numLoadPorts > 0) Some(Vec(numLoadPorts, Output(UInt(exuParameters.LduCnt.W)))) else None
     val loadFastImm = if (numLoadPorts > 0) Some(Vec(numLoadPorts, Output(UInt(12.W)))) else None
@@ -258,7 +255,7 @@ class SchedulerImp(outer: Scheduler) extends LazyModuleImp(outer) with HasXSPara
     // special ports for load / store rs
     val enqLsq = if (outer.numReplayPorts > 0) Some(Flipped(new LsqEnqIO)) else None
     val lcommit = Input(UInt(log2Up(CommitWidth + 1).W))
-    val scommit = Input(UInt(log2Ceil(EnsbufferWidth + 1).W)) // connected to `memBlock.io.sqDeq` instead of ROB
+    val scommit = Input(UInt(log2Up(CommitWidth + 1).W))
     // from lsq
     val lqCancelCnt = Input(UInt(log2Up(LoadQueueSize + 1).W))
     val sqCancelCnt = Input(UInt(log2Up(StoreQueueSize + 1).W))
@@ -368,12 +365,12 @@ class SchedulerImp(outer: Scheduler) extends LazyModuleImp(outer) with HasXSPara
     val debugRead = if (isInt) io.extra.debug_int_rat else io.extra.debug_fp_rat
     if (isInt) {
       val wen = wbPorts.map(wb => wb.valid && wb.bits.uop.ctrl.rfWen)
-      Regfile(NRPhyRegs, readIntRf, wen, waddr, wdata, true, debugRead = Some(debugRead))
+      Regfile(NRPhyRegs, readIntRf, wen, waddr, wdata, true, debugRead = Some(debugRead), fastSim = !env.FPGAPlatform)
     }
     else {
       // For floating-point function units, every instruction writes either int or fp regfile.
       val wen = wbPorts.map(_.valid)
-      Regfile(NRPhyRegs, readFpRf, wen, waddr, wdata, false, debugRead = Some(debugRead))
+      Regfile(NRPhyRegs, readFpRf, wen, waddr, wdata, false, debugRead = Some(debugRead), fastSim = !env.FPGAPlatform)
     }
   }
 
@@ -423,7 +420,7 @@ class SchedulerImp(outer: Scheduler) extends LazyModuleImp(outer) with HasXSPara
     if (rs.io.jump.isDefined) {
       val jumpFire = VecInit(rs.io.fromDispatch.map(dp => dp.fire && dp.bits.isJump)).asUInt.orR
       rs.io.jump.get.jumpPc := RegEnable(io.extra.jumpPc, jumpFire)
-      rs.io.jump.get.jalr_target := RegEnable(io.extra.jalr_target, jumpFire)
+      rs.io.jump.get.jalr_target := io.extra.jalr_target
     }
     if (rs.io.checkwait.isDefined) {
       rs.io.checkwait.get.stIssuePtr <> io.extra.stIssuePtr

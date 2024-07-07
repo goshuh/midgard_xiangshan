@@ -21,6 +21,7 @@ import chisel3._
 import chisel3.util._
 import xiangshan._
 import utils._
+import xiangshan.ExceptionNO._
 import xiangshan.backend.rename.RatReadPort
 
 class DecodeStage(implicit p: Parameters) extends XSModule with HasPerfEvents {
@@ -78,17 +79,17 @@ class DecodeStage(implicit p: Parameters) extends XSModule with HasPerfEvents {
   }
 
   for (i <- 0 until DecodeWidth) {
-    val priv_vio = io.in(i).valid     &&
+    val priv_chk = io.in(i).valid     &&
                    io.in(i).bits.priv && !priv_last(i) &&
                   (io.in(i).bits.pc  =/=  X64Decode.UATG)
 
-    when (priv_vio) {
+    when (priv_chk) {
       io.out(i).bits.cf.exceptionVec(ExceptionNO.illegalInstr) := true.B
     }
   }
 
   val vld_vec  = Cat(io.in.map(_.valid).reverse)
-  val vld_last = vld_vec & ~(vld_vec >> 1)
+  val vld_last = vld_vec & Cat(true.B, ~vld_vec(DecodeWidth - 1, 1))
 
   priv_q := RegEnable(Mux(io.redirect.valid,
                           io.redirect.bits.priv,

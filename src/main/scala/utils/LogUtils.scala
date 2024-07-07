@@ -43,7 +43,7 @@ object XSLog {
     val logTimestamp = WireInit(0.U(64.W))
     val enableDebug = debugOpts.EnableDebug && debugLevel != XSLogLevel.PERF
     val enablePerf = debugOpts.EnablePerfDebug && debugLevel == XSLogLevel.PERF
-    if (!debugOpts.FPGAPlatform && (enableDebug || enablePerf || debugLevel == XSLogLevel.ERROR)) {
+    if (enableDebug || enablePerf || !debugOpts.FPGAPlatform && (debugLevel == XSLogLevel.ERROR)) {
       ExcitingUtils.addSink(logEnable, "DISPLAY_LOG_ENABLE")
       ExcitingUtils.addSink(logTimestamp, "logTimestamp")
       val check_cond = (if (debugLevel == XSLogLevel.ERROR) true.B else logEnable) && cond
@@ -60,7 +60,7 @@ object XSLog {
   def displayLog(implicit p: Parameters): Bool = {
     val debugOpts = p(DebugOptionsKey)
     val ret = WireInit(false.B)
-    if (!debugOpts.FPGAPlatform && debugOpts.EnableDebug) {
+    if (debugOpts.EnableDebug) {
       val logEnable = WireInit(false.B)
       ExcitingUtils.addSink(logEnable, "DISPLAY_LOG_ENABLE")
       ret := logEnable

@@ -48,12 +48,13 @@ object genWdata {
   }
 }
 
-class LsPipelineBundle(implicit p: Parameters) extends XSBundleWithMicroOp {
+class LsPipelineBundle(implicit p: Parameters) extends XSBundle {
   val vaddr = UInt(VAddrBits.W)
   val paddr = UInt(PAddrBits.W)
   // val func = UInt(6.W)
   val mask = UInt(8.W)
   val data = UInt((XLEN+1).W)
+  val uop = new MicroOp
   val wlineflag = Bool() // store write the whole cache line
 
   val miss = Bool()
@@ -72,11 +73,37 @@ class LsPipelineBundle(implicit p: Parameters) extends XSBundleWithMicroOp {
   val isFirstIssue = Bool()
 }
 
-class LoadForwardQueryIO(implicit p: Parameters) extends XSBundleWithMicroOp {
+class LqWriteBundle(implicit p: Parameters) extends LsPipelineBundle {
+  // queue entry data, except flag bits, will be updated if writeQueue is true,
+  // valid bit in LqWriteBundle will be ignored
+  val lq_data_wen_dup = Vec(6, Bool()) // dirty reg dup
+
+  def fromLsPipelineBundle(input: LsPipelineBundle) = {
+    vaddr := input.vaddr
+    paddr := input.paddr
+    mask := input.mask
+    data := input.data
+    uop := input.uop
+    wlineflag := input.wlineflag
+    miss := input.miss
+    tlbMiss := input.tlbMiss
+    ptwBack := input.ptwBack
+    mmio := input.mmio
+    rsIdx := input.rsIdx
+    forwardMask := input.forwardMask
+    forwardData := input.forwardData
+    isSoftPrefetch := input.isSoftPrefetch
+    isFirstIssue := input.isFirstIssue
+
+    lq_data_wen_dup := DontCare
+  }
+}
+
+class LoadForwardQueryIO(implicit p: Parameters) extends XSBundle {
   val vaddr = Output(UInt(VAddrBits.W))
   val paddr = Output(UInt(PAddrBits.W))
   val mask = Output(UInt(8.W))
-  override val uop = Output(new MicroOp) // for replay
+  val uop = Output(new MicroOp) // for replay
   val pc = Output(UInt(VAddrBits.W)) //for debug
   val valid = Output(Bool())
 
@@ -121,8 +148,9 @@ class PipeLoadForwardQueryIO(implicit p: Parameters) extends LoadForwardQueryIO 
 // Note that query req may be !ready, as dcache is releasing a block
 // If it happens, a replay from rs is needed.
 
-class LoadViolationQueryReq(implicit p: Parameters) extends XSBundleWithMicroOp { // provide lqIdx
+class LoadViolationQueryReq(implicit p: Parameters) extends XSBundle {
   val paddr = UInt(PAddrBits.W)
+  val uop = new MicroOp // provide lqIdx
 }
 
 class LoadViolationQueryResp(implicit p: Parameters) extends XSBundle {
@@ -132,6 +160,46 @@ class LoadViolationQueryResp(implicit p: Parameters) extends XSBundle {
 class LoadViolationQueryIO(implicit p: Parameters) extends XSBundle {
   val req = Decoupled(new LoadViolationQueryReq)
   val resp = Flipped(Valid(new LoadViolationQueryResp))
+}
+
+// Store byte valid mask write bundle
+//
+// Store byte valid mask write to SQ takes 2 cycles
+class StoreMaskBundle(implicit p: Parameters) extends XSBundle {
+  val sqIdx = new SqPtr
+  val mask = UInt(8.W)
+}
+
+class LoadDataFromDcacheBundle(implicit p: Parameters) extends DCacheBundle {
+  val bankedDcacheData = Vec(DCacheBanks, UInt(64.W))
+  val bank_oh = UInt(DCacheBanks.W)
+  val forwardMask = Vec(8, Bool())
+  val forwardData = Vec(8, UInt(8.W))
+  val uop = new MicroOp // for data selection, only fwen and fuOpType are used
+  val addrOffset = UInt(3.W) // for data selection
+
+  // val dcacheData = UInt(64.W)
+  def dcacheData(): UInt = {
+    Mux1H(bank_oh, bankedDcacheData)
+  }
+
+  def mergedData(): UInt = {
+    val rdataVec = VecInit((0 until XLEN / 8).map(j =>
+      Mux(forwardMask(j), forwardData(j), dcacheData()(8*(j+1)-1, 8*j))
+    ))
+    rdataVec.asUInt
+  }
+}
+
+// Load writeback data from load queue (refill)
+class LoadDataFromLQBundle(implicit p: Parameters) extends XSBundle {
+  val lqData = UInt(64.W) // load queue has merged data
+  val uop = new MicroOp // for data selection, only fwen and fuOpType are used
+  val addrOffset = UInt(3.W) // for data selection
+
+  def mergedData(): UInt = {
+    lqData
+  }
 }
 
 // Bundle for load / store wait waking up

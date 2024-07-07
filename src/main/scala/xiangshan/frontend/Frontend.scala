@@ -44,7 +44,7 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
     val hartId = Input(UInt(8.W))
     val reset_vector = Input(UInt(PAddrBits.W))
     val fencei = Input(Bool())
-    val ptw = new VectorTlbPtwIO(4)
+    val ptw = new TlbPtwIO(6)
     val ttw = new FSTWIO(mgFSParam)
     val backend = new FrontendToCtrlIO
     val sfence = Input(new SfenceBundle)
@@ -69,20 +69,15 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   val ibuffer =  Module(new Ibuffer)
   val ftq = Module(new Ftq)
 
-  val needFlush = RegNext(io.backend.toFtq.redirect.valid)
-
   val tlbCsr = DelayN(io.tlbCsr, 2)
   val csrCtrl = DelayN(io.csrCtrl, 2)
   val sfence = RegNext(RegNext(io.sfence))
 
   // trigger
   ifu.io.frontendTrigger := csrCtrl.frontend_trigger
-  val triggerEn = csrCtrl.trigger_enable
-  ifu.io.csrTriggerEnable := VecInit(triggerEn(0), triggerEn(1), triggerEn(6), triggerEn(8))
 
   // bpu ctrl
   bpu.io.ctrl := csrCtrl.bp_ctrl
-  bpu.io.reset_vector := io.reset_vector
 
 // pmp
   val pmp = Module(new PMP())
@@ -98,50 +93,84 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
     pmp_check(i).apply(tlbCsr.priv.imode, pmp.io.pmp, pmp.io.pma, pmp_req_vec(i))
   }
 
-  val itlb = Module(new TLB(4, Seq(true, true, false, true), itlbParams))
-  itlb.io.base_connect(io.sfence, tlbCsr)
-  io.ptw.connect(itlb.io.ptw)
-  itlb.io.ptw_replenish <> DontCare
-  itlb.io.flushPipe.map(_ := needFlush)
-
   icache.io.prefetch <> ftq.io.toPrefetch
 
+  val needFlush = RegNext(io.backend.toFtq.redirect.valid)
+
   // midgard
-  val ivlb = Module(new FSVLBWrapper(4, true, mgFSParam))
+  val ivlb = Module(new FSVLBWrapper(6, true, mgFSParam))
 
   ivlb.csr_i    := tlbCsr
-  ivlb.sfence_i := io.sfence
+  ivlb.fence_i  := io.sfence
   ivlb.flush_i  := needFlush
 
-  for (i <- 0 until 4) {
-    ivlb.tlb_o(i) <> itlb.io.requestor(i)
-    ivlb.pmp_i(i) <> pmp_check(i).resp
+  ivlb.pmp_i(0) := pmp_check(0).resp
+  ivlb.pmp_i(1) := DontCare
+  ivlb.pmp_i(2) := pmp_check(1).resp
+  ivlb.pmp_i(3) := DontCare
+  ivlb.pmp_i(4) := pmp_check(2).resp
+  ivlb.pmp_i(5) := pmp_check(3).resp
+
+  val itlb_req = Seq.fill(6)(Wire(new BlockTlbRequestIO))
+
+  def block_dst(d: BlockTlbRequestIO, s: TlbRequestIO): Unit = {
+    d.req      <> s.req
+    d.resp     <> s.resp
   }
+
+  def block_src(d: TlbRequestIO, s: BlockTlbRequestIO): Unit = {
+    d.req      <> s.req
+    d.resp     <> s.resp
+    d.req_kill := false.B
+  }
+
+  block_dst(itlb_req(0), ivlb.tlb_o(0))
+  block_dst(itlb_req(1), ivlb.tlb_o(1))
+  block_dst(itlb_req(2), ivlb.tlb_o(2))
+  block_dst(itlb_req(3), ivlb.tlb_o(3))
+  block_dst(itlb_req(4), ivlb.tlb_o(4))
+  block_dst(itlb_req(5), ivlb.tlb_o(5))
+
+  io.ptw <> TLB(
+    in = itlb_req,
+    sfence = DelayN(io.sfence, 1),
+    csr = DelayN(io.tlbCsr, 1),
+    width = 6,
+    nRespDups = 1,
+    shouldBlock = true,
+    itlbParams
+  )
+
+  block_src(ivlb.tlb_i(0), icache.io.itlb(0))
+  block_src(ivlb.tlb_i(1), icache.io.itlb(1))
+  block_src(ivlb.tlb_i(2), icache.io.itlb(2))
+  block_src(ivlb.tlb_i(3), icache.io.itlb(3))
+  block_src(ivlb.tlb_i(4), icache.io.itlb(4))
+  block_src(ivlb.tlb_i(5), ifu.io.iTLBInter)
 
   io.ttw                <> ivlb.ttw_o
 
-  icache.io.itlb(0)     <> ivlb.tlb_i(0)
-  icache.io.itlb(1)     <> ivlb.tlb_i(1)
-  icache.io.itlb(2)     <> ivlb.tlb_i(2)
-  ifu.io.iTLBInter      <> ivlb.tlb_i(3)
-
   icache.io.pmp(0).resp <> ivlb.pmp_o(0)
-  icache.io.pmp(1).resp <> ivlb.pmp_o(1)
-  icache.io.pmp(2).resp <> ivlb.pmp_o(2)
-  ifu.io.pmp.resp       <> ivlb.pmp_o(3)
-
+  icache.io.pmp(1).resp <> ivlb.pmp_o(2)
+  icache.io.pmp(2).resp <> ivlb.pmp_o(4)
+  ifu.io.pmp.resp       <> ivlb.pmp_o(5)
 
   //IFU-Ftq
   ifu.io.ftqInter.fromFtq <> ftq.io.toIfu
+  ftq.io.toIfu.req.ready :=  ifu.io.ftqInter.fromFtq.req.ready && icache.io.fetch.req.ready
+
   ftq.io.fromIfu          <> ifu.io.ftqInter.toFtq
   bpu.io.ftq_to_bpu       <> ftq.io.toBpu
   ftq.io.fromBpu          <> bpu.io.bpu_to_ftq
+
+  ftq.io.mmioCommitRead   <> ifu.io.mmioCommitRead
   //IFU-ICache
-  for(i <- 0 until 2){
-    ifu.io.icacheInter(i).req       <>      icache.io.fetch(i).req
-    icache.io.fetch(i).req <> ifu.io.icacheInter(i).req
-    ifu.io.icacheInter(i).resp <> icache.io.fetch(i).resp
-  }
+
+  icache.io.fetch.req <> ftq.io.toICache.req
+  ftq.io.toICache.req.ready :=  ifu.io.ftqInter.fromFtq.req.ready && icache.io.fetch.req.ready
+
+  ifu.io.icacheInter.resp <>    icache.io.fetch.resp
+  ifu.io.icacheInter.icacheReady :=  icache.io.toIFU
   icache.io.stop := ifu.io.icacheStop
 
   ifu.io.icachePerfInfo := icache.io.perfInfo
@@ -180,7 +209,19 @@ class FrontendImp (outer: Frontend) extends LazyModuleImp(outer)
   pfevent.io.distribute_csr := io.csrCtrl.distribute_csr
   val csrevents = pfevent.io.hpmevent.take(8)
 
-  val allPerfEvents = Seq(ifu, ibuffer, icache, ftq, bpu).flatMap(_.getPerf)
-  override val perfEvents = HPerfMonitor(csrevents, allPerfEvents).getPerfEvents
+  val perfFromUnits = Seq(ifu, ibuffer, icache, ftq, bpu).flatMap(_.getPerfEvents)
+  val perfFromIO    = Seq()
+  val perfBlock     = Seq()
+  // let index = 0 be no event
+  val allPerfEvents = Seq(("noEvent", 0.U)) ++ perfFromUnits ++ perfFromIO ++ perfBlock
+
+  if (printEventCoding) {
+    for (((name, inc), i) <- allPerfEvents.zipWithIndex) {
+      println("Frontend perfEvents Set", name, inc, i)
+    }
+  }
+
+  val allPerfInc = allPerfEvents.map(_._2.asTypeOf(new PerfEvent))
+  override val perfEvents = HPerfMonitor(csrevents, allPerfInc).getPerfEvents
   generatePerfEvent()
 }

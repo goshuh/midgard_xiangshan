@@ -32,7 +32,6 @@ import top.BusPerfMonitor
 import xiangshan.backend.fu.PMAConst
 import huancun._
 import huancun.debug.TLLogger
-import freechips.rocketchip.diplomacy.{Resource, ResourceBinding, ResourceInt, Binding}
 
 case object SoCParamsKey extends Field[SoCParameters]
 
@@ -139,8 +138,10 @@ trait HaveSlaveAXI4Port {
   l3_xbar :=
     TLFIFOFixer() :=
     TLWidthWidget(32) :=
+    TLBuffer() :=
     AXI4ToTL() :=
-    AXI4UserYanker(Some(1)) :=
+    AXI4Buffer() :=
+    AXI4UserYanker(Some(32)) :=
     AXI4Fragmenter() :=
     AXI4Buffer() :=
     AXI4IdIndexer(1) :=
@@ -308,11 +309,11 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
   val debugModule = LazyModule(new DebugModule(NumCores)(p))
   debugModule.debug.node := peripheralXbar
   debugModule.debug.dmInner.dmInner.sb2tlOpt.foreach { sb2tl  =>
-    l3_xbar := TLBuffer() := sb2tl.node
+    l3_xbar := TLBuffer() := TLWidthWidget(1) := sb2tl.node
   }
 
   val pma = LazyModule(new TLPMA)
-  pma.node := 
+  pma.node :=
     TLBuffer() :=
     peripheralXbar
 
@@ -320,7 +321,6 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
 
     val debug_module_io = IO(chiselTypeOf(debugModule.module.io))
     val ext_intrs = IO(Input(UInt(NrExtIntr.W)))
-    val rtc_clock = IO(Input(Bool()))
     val pll0_lock = IO(Input(Bool()))
     val pll0_ctrl = IO(Output(Vec(6, UInt(32.W))))
     val cacheable_check = IO(new TLPMAIO)
@@ -332,21 +332,12 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
     for ((plic_in, interrupt) <- plicSource.module.in.zip(ext_intrs.asBools)) {
       val ext_intr_sync = RegInit(0.U(3.W))
       ext_intr_sync := Cat(ext_intr_sync(1, 0), interrupt)
-      plic_in := ext_intr_sync(1) && !ext_intr_sync(2)
+      plic_in := ext_intr_sync(2)
     }
 
     pma.module.io <> cacheable_check
 
-    // positive edge sampling of the lower-speed rtc_clock
-    val rtcTick = RegInit(0.U(3.W))
-    rtcTick := Cat(rtcTick(1, 0), rtc_clock)
-    clint.module.io.rtcTick := rtcTick(1) && !rtcTick(2)
-
-    val freq = 100
-    val cnt = RegInit(freq.U)
-    val tick = cnt === 0.U
-    cnt := Mux(tick, freq.U, cnt - 1.U)
-    clint.module.io.rtcTick := tick
+    clint.module.io.rtcTick := clock.asBool
 
     val pll_ctrl_regs = Seq.fill(6){ RegInit(0.U(32.W)) }
     val pll_lock = RegNext(next = pll0_lock, init = false.B)

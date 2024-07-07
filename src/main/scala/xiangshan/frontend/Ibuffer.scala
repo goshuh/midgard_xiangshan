@@ -85,7 +85,6 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
     cf.ssid := DontCare
     cf.ftqPtr := ftqPtr
     cf.ftqOffset := ftqOffset
-    cf.replayInst := false.B
     cf
   }
 }
@@ -93,7 +92,7 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
 class Ibuffer(implicit p: Parameters) extends XSModule with HasCircularQueuePtrHelper with HasPerfEvents {
   val io = IO(new IBufferIO)
 
-  val ibuf = Module(new SyncDataModuleTemplate(new IBufEntry, IBufSize, 2 * DecodeWidth, PredictWidth))
+  val ibuf = Module(new SyncDataModuleTemplate(new IBufEntry, IBufSize, 2 * DecodeWidth, PredictWidth, "IBuffer"))
 
   val deqPtrVec = RegInit(VecInit.tabulate(2 * DecodeWidth)(_.U.asTypeOf(new IbufPtr)))
   val deqPtrVecNext = Wire(Vec(2 * DecodeWidth, new IbufPtr))

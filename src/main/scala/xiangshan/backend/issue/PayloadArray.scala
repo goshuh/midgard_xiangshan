@@ -42,11 +42,17 @@ class PayloadArray[T <: Data](gen: T, params: RSParams)(implicit p: Parameters) 
   })
 
   val payload = Reg(Vec(params.numEntries, gen))
+  // specialized other RS to reduce registers
+  // However, they should be optimized out by the synthesis tools as well.
+  val immArray = if (!params.isJump) Some(Reg(Vec(params.numEntries, UInt(12.W)))) else None
 
   // read ports
-  io.read.map(_.data).zip(io.read.map(_.addr)).map {
+  io.read.map(_.data).zip(io.read.map(_.addr)).foreach {
     case (data, addr) => data := Mux1H(addr, payload)
     XSError(PopCount(addr) > 1.U, p"raddr ${Binary(addr)} is not one-hot\n")
+    if (immArray.isDefined && gen.isInstanceOf[MicroOp]) {
+      data.asInstanceOf[MicroOp].ctrl.imm := Mux1H(addr, immArray.get)
+    }
   }
 
   // write ports
@@ -58,6 +64,11 @@ class PayloadArray[T <: Data](gen: T, params: RSParams)(implicit p: Parameters) 
       payload(i) := wdata
     }
     XSError(PopCount(wenVec) > 1.U, p"wenVec ${Binary(wenVec.asUInt)} is not one-hot\n")
+    if (immArray.isDefined && gen.isInstanceOf[MicroOp]) {
+      when (wen) {
+        immArray.get(i) := wdata.asInstanceOf[MicroOp].ctrl.imm
+      }
+    }
   }
 
   for (w <- io.write) {

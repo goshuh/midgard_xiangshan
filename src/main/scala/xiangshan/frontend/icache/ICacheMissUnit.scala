@@ -95,6 +95,7 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
 
   val s_idle  :: s_send_mem_aquire :: s_wait_mem_grant :: s_write_back :: s_send_grant_ack :: s_send_replace :: s_wait_replace :: s_wait_resp :: Nil = Enum(8)
   val state = RegInit(s_idle)
+  val state_dup = Seq.fill(5)(RegInit(s_idle))
   /** control logic transformation */
   //request register
   val req = Reg(new ICacheMissReq)
@@ -104,7 +105,7 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
   val release_id  = Cat(MainPipeKey.U, id.U)
   val req_corrupt = RegInit(false.B)
 
-  io.victimInfor.valid := state === s_send_replace || state === s_wait_replace || state === s_wait_resp
+  io.victimInfor.valid := state_dup(0) === s_send_replace || state_dup(0) === s_wait_replace || state_dup(0) === s_write_back || state_dup(0) === s_wait_resp
   io.victimInfor.vidx  := req_idx
 
   val (_, _, refill_done, refill_address_inc) = edge.addr_inc(io.mem_grant)
@@ -129,10 +130,10 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
   io.release_req.bits.param := DontCare //release will not care tilelink param
 
   io.req.ready := (state === s_idle)
-  io.mem_acquire.valid := (state === s_send_mem_aquire)
-  io.release_req.valid := (state === s_send_replace)
+  io.mem_acquire.valid := (state_dup(1) === s_send_mem_aquire)
+  io.release_req.valid := (state_dup(1) === s_send_replace)
 
-  io.toPrefetch.valid := (state =/= s_idle)
+  io.toPrefetch.valid := (state_dup(2) =/= s_idle)
   io.toPrefetch.bits  :=  addrAlign(req.paddr, blockBytes, PAddrBits)
 
   val grantack = RegEnable(edge.GrantAck(io.mem_grant.bits), io.mem_grant.fire())
@@ -146,6 +147,7 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
       when(io.req.fire()) {
         readBeatCnt := 0.U
         state := s_send_mem_aquire
+        state_dup.map(_ := s_send_mem_aquire)
         req := io.req.bits
       }
     }
@@ -154,6 +156,7 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
     is(s_send_mem_aquire) {
       when(io.mem_acquire.fire()) {
         state := s_wait_mem_grant
+        state_dup.map(_ := s_wait_mem_grant)
       }
     }
 
@@ -168,6 +171,7 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
           when(readBeatCnt === (refillCycles - 1).U) {
             assert(refill_done, "refill not done!")
             state := s_send_grant_ack
+            state_dup.map(_ := s_send_grant_ack)
           }
         }
       }
@@ -176,23 +180,27 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
     is(s_send_grant_ack) {
       when(io.mem_finish.fire()) {
         state := s_send_replace
+        state_dup.map(_ := s_send_replace)
       }
     }
 
     is(s_send_replace){
       when(io.release_req.fire()){
         state := s_wait_replace
+        state_dup.map(_ := s_wait_replace)
       }
     }
 
     is(s_wait_replace){
       when(io.release_resp.valid && io.release_resp.bits === release_id){
         state := s_write_back
+        state_dup.map(_ := s_write_back)
       }
     }
 
     is(s_write_back) {
       state := Mux(io.meta_write.fire() && io.data_write.fire(), s_wait_resp, s_write_back)
+      state_dup.map(_ := Mux(io.meta_write.fire() && io.data_write.fire(), s_wait_resp, s_write_back))
     }
 
     is(s_wait_resp) {
@@ -200,6 +208,7 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
       io.resp.bits.corrupt := req_corrupt
       when(io.resp.fire()) {
         state := s_idle
+        state_dup.map(_ := s_idle)
       }
     }
   }
@@ -219,7 +228,7 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
   require(nSets <= 256) // icache size should not be more than 128KB
 
   /** Grant ACK */
-  io.mem_finish.valid := (state === s_send_grant_ack) && is_grant
+  io.mem_finish.valid := (state_dup(3) === s_send_grant_ack) && is_grant
   io.mem_finish.bits := grantack
 
   //resp to ifu
@@ -239,11 +248,11 @@ class ICacheMissEntry(edge: TLEdgeOut, id: Int)(implicit p: Parameters) extends 
   io.meta_write.bits.generate(tag = req_tag, coh = miss_new_coh, idx = req_idx, waymask = req_waymask, bankIdx = req_idx(0))
 
   io.data_write.valid := (state === s_write_back)
-  io.data_write.bits.generate(data = respDataReg.asUInt,
-                              idx  = req_idx,
-                              waymask = req_waymask,
-                              bankIdx = req_idx(0),
-                              paddr = req.paddr)
+  val dataWriteEn = Wire(Vec(4, Bool()))
+  dataWriteEn.zipWithIndex.map{ case(wen,i) => 
+    wen := state_dup(i) === s_write_back
+  }
+  io.data_write.bits.generate(data = respDataReg.asUInt, idx = req_idx, waymask = req_waymask, bankIdx = req_idx(0), writeEn = dataWriteEn, paddr = req.paddr)
 
   XSPerfAccumulate(
     "entryPenalty" + Integer.toString(id, 10),
@@ -294,6 +303,7 @@ class ICacheMissUnit(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheMiss
     val entry = Module(new ICacheMissEntry(edge, i))
 
     entry.io.id := i.U
+    println(s"miss entry ID: ${i}")
 
     // entry req
     entry.io.req.valid := io.req(i).valid
@@ -332,7 +342,7 @@ class ICacheMissUnit(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheMiss
 
   val alloc = Wire(UInt(log2Ceil(nPrefetchEntries).W))
 
-  val prefEntries = (PortNumber until PortNumber + nPrefetchEntries) map { i =>
+  val prefEntries = (iprefetchUnitIDStart until iprefetchUnitIDStart + nPrefetchEntries) map { i =>
     val prefetchEntry = Module(new IPrefetchEntry(edge, PortNumber))
 
     prefetchEntry.io.mem_hint_ack.valid := false.B
@@ -346,6 +356,7 @@ class ICacheMissUnit(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheMiss
     prefetchEntry.io.req.bits  := io.prefetch_req.bits
 
     prefetchEntry.io.id := i.U
+    println(s"prefetch entry ID: ${i}")
 
     prefetchEntry
   }
@@ -359,7 +370,7 @@ class ICacheMissUnit(edge: TLEdgeOut)(implicit p: Parameters) extends ICacheMiss
 
   io.meta_write     <> meta_write_arb.io.out
   io.data_write     <> refill_arb.io.out
-  io.release_req        <> release_arb.io.out
+  io.release_req    <> release_arb.io.out
 
   if (env.EnableDifftest) {
     val difftest = Module(new DifftestRefillEvent)

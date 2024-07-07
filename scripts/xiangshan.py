@@ -74,7 +74,6 @@ class XSArgs(object):
         self.threads = args.threads
         self.with_dramsim3 = 1 if args.with_dramsim3 else None
         self.is_release = 1 if args.release else None
-        self.is_spike = "spike" if args.spike else None
         self.trace = 1 if args.trace or not args.disable_fork else None
         self.config = args.config
         # emu arguments
@@ -319,6 +318,8 @@ class XiangShan(object):
             "cache-alias/aliastest-riscv64-xs.bin",
             "Svinval/rv64mi-p-svinval.bin",
             "pmp/pmp.riscv.bin",
+            "pmp/pmp-am/amtest-riscv64-xs.bin",
+            "pmp/hugepage-pmp-atom/amtest-riscv64-xs.bin",
             "asid/asid.bin",
             "isa_misc/xret_clear_mprv.bin",
             "isa_misc/satp_ppn.bin",
@@ -326,6 +327,35 @@ class XiangShan(object):
         ]
         misc_tests = map(lambda x: os.path.join(base_dir, x), workloads)
         return misc_tests
+
+    def __get_ci_privilege(self, name=None):
+        base_dir = "/nfs/home/share/ci-workloads/privilege"
+        # TODO: add all privilege workloads when CSR debug would finish
+        workloads = [
+            "rv64mi-p-asid.bin",
+            "rv64mi-p-csr.bin",
+            "rv64mi-p-illegal.bin",
+            "rv64mi-p-ma_addr.bin",
+            "rv64mi-p-ma_fetch.bin",
+            "rv64mi-p-mcsr.bin",
+            "rv64mi-p-pbmt.bin",
+            "rv64mi-p-sbreak.bin",
+            "rv64mi-p-scall.bin",
+            "rv64mi-p-svinval.bin",
+            "rv64mi-p-xret_clear_mprv.bin",
+            "rv64mi-p-xtvec.bin",
+            "rv64si-p-csr.bin",
+            "rv64si-p-dirty.bin",
+            "rv64si-p-icache-alias.bin",
+            "rv64si-p-immio-af.bin",
+            "rv64si-p-ma_fetch.bin",
+            "rv64si-p-satp_ppn.bin",
+            "rv64si-p-sbreak.bin",
+            "rv64si-p-scall.bin",
+            "rv64si-p-wfi.bin",
+        ]
+        privilege_tests = map(lambda x: os.path.join(base_dir, x), workloads)
+        return privilege_tests
 
     def __get_ci_mc(self, name=None):
         base_dir = "/nfs/home/share/ci-workloads"
@@ -373,8 +403,7 @@ class XiangShan(object):
             "/nfs-nvme/home/share/checkpoints_profiles/spec06_rv64gc_o2_50m/take_cpt",
             "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gcb_o2_20m/take_cpt",
             "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gcb_o3_20m/take_cpt",
-            "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gc_o2_50m/take_cpt",
-            "/nfs-nvme/home/share/checkpoints_profiles/spec17_speed_rv64gcb_o3_20m/take_cpt"
+            "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gc_o2_50m/take_cpt"
         ]
         all_json = [
             "/nfs-nvme/home/share/checkpoints_profiles/spec06_rv64gcb_o2_20m/json/simpoint_summary.json",
@@ -383,8 +412,7 @@ class XiangShan(object):
             "/nfs-nvme/home/share/checkpoints_profiles/spec06_rv64gc_o2_50m/simpoint_summary.json",
             "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gcb_o2_20m/simpoint_summary.json",
             "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gcb_o3_20m/simpoint_summary.json",
-            "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gc_o2_50m/simpoint_summary.json",
-            "/nfs-nvme/home/share/checkpoints_profiles/spec17_speed_rv64gcb_o3_20m/simpoint_summary.json"
+            "/nfs-nvme/home/share/checkpoints_profiles/spec17_rv64gc_o2_50m/simpoint_summary.json"
         ]
         assert(len(all_cpt) == len(all_json))
         cpt_path, json_path = random.choice(list(zip(all_cpt, all_json)))
@@ -392,6 +420,29 @@ class XiangShan(object):
         return [random.choice(all_gcpt)]
 
     def run_ci(self, test):
+        all_tests = {
+            "cputest": self.__get_ci_cputest,
+            "riscv-tests": self.__get_ci_rvtest,
+            "privilege": self.__get_ci_privilege,
+            "misc-tests": self.__get_ci_misc,
+            "mc-tests": self.__get_ci_mc,
+            "nodiff-tests": self.__get_ci_nodiff,
+            "microbench": self.__am_apps_path,
+            "coremark": self.__am_apps_path
+        }
+        for target in all_tests.get(test, self.__get_ci_workloads)(test):
+            print(target)
+            ret = self.run_emu(target)
+            if ret:
+                if self.args.default_wave_home != self.args.wave_home:
+                    print("copy wave file to " + self.args.wave_home)
+                    self.__exec_cmd(f"cp $NOOP_HOME/build/*.vcd $WAVE_HOME")
+                    self.__exec_cmd(f"cp $NOOP_HOME/build/emu $WAVE_HOME")
+                    self.__exec_cmd(f"cp $NOOP_HOME/build/SimTop.v $WAVE_HOME")
+                return ret
+        return 0
+
+    def run_ci_vcs(self, test):
         all_tests = {
             "cputest": self.__get_ci_cputest,
             "riscv-tests": self.__get_ci_rvtest,
@@ -403,7 +454,7 @@ class XiangShan(object):
         }
         for target in all_tests.get(test, self.__get_ci_workloads)(test):
             print(target)
-            ret = self.run_emu(target)
+            ret = self.run_simv(target)
             if ret:
                 if self.args.default_wave_home != self.args.wave_home:
                     print("copy wave file to " + self.args.wave_home)
@@ -482,7 +533,6 @@ if __name__ == "__main__":
     parser.add_argument('--max-instr', nargs='?', type=int, help='max instr')
     parser.add_argument('--disable-fork', action='store_true', help='disable lightSSS')
     parser.add_argument('--no-diff', action='store_true', help='disable difftest')
-    parser.add_argument('--ram-size', nargs='?', type=str, help='manually set simulation memory size (8GB by default)')
 
     args = parser.parse_args()
 

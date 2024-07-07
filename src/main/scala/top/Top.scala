@@ -26,9 +26,15 @@ import chisel3.stage.ChiselGeneratorAnnotation
 import chipsalliance.rocketchip.config._
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.tilelink._
+import freechips.rocketchip.amba.axi4._
+import freechips.rocketchip.devices.tilelink._
+import freechips.rocketchip.interrupts._
 import freechips.rocketchip.jtag.JTAGIO
 import freechips.rocketchip.util.{ElaborationArtefacts, HasRocketChipStageUtils, UIntToOH1}
-import huancun.{HCCacheParamsKey, MidgardKey, HuanCun}
+import huancun.debug.TLLogger
+import huancun.{HCCacheParamsKey, HuanCun, MidgardKey}
+import huancun.utils.ResetGen
+import freechips.rocketchip.devices.debug.{DebugIO, ResetCtrlIO}
 
 abstract class BaseXSSoc()(implicit p: Parameters) extends LazyModule
   with BindingScope
@@ -93,7 +99,7 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
   val core_rst_nodes = if(l3cacheOpt.nonEmpty && l3cacheOpt.get.rst_nodes.nonEmpty){
     l3cacheOpt.get.rst_nodes.get
   } else {
-    core_with_l2.map(_ => BundleBridgeSource(() => Bool()))
+    core_with_l2.map(_ => BundleBridgeSource(() => Reset()))
   }
 
   core_rst_nodes.zip(core_with_l2.map(_.core_reset_sink)).foreach({
@@ -120,27 +126,29 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
 
     val io = IO(new Bundle {
       val clock = Input(Bool())
-      val reset = Input(Bool())
+      val reset = Input(AsyncReset())
       val sram_config = Input(UInt(16.W))
       val extIntrs = Input(UInt(NrExtIntr.W))
       val pll0_lock = Input(Bool())
       val pll0_ctrl = Output(Vec(6, UInt(32.W)))
       val systemjtag = new Bundle {
         val jtag = Flipped(new JTAGIO(hasTRSTn = false))
-        val reset = Input(Bool()) // No reset allowed on top
+        val reset = Input(AsyncReset()) // No reset allowed on top
         val mfr_id = Input(UInt(11.W))
         val part_number = Input(UInt(16.W))
         val version = Input(UInt(4.W))
       }
       val debug_reset = Output(Bool())
-      val rtc_clock = Input(Bool())
       val cacheable_check = new TLPMAIO()
       val riscv_halt = Output(Vec(NumCores, Bool()))
-      val riscv_rst_vec = Input(Vec(NumCores, UInt(38.W)))
     })
+
+    val reset_sync = withClockAndReset(io.clock.asClock, io.reset) { ResetGen() }
+    val jtag_reset_sync = withClockAndReset(io.systemjtag.jtag.TCK, io.systemjtag.reset) { ResetGen() }
+
     // override LazyRawModuleImp's clock and reset
     childClock := io.clock.asClock
-    childReset := io.reset
+    childReset := reset_sync
 
     // output
     io.debug_reset := misc.module.debug_module_io.debugIO.ndreset
@@ -150,7 +158,6 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
     dontTouch(io)
     dontTouch(memory)
     misc.module.ext_intrs := io.extIntrs
-    misc.module.rtc_clock := io.rtc_clock
     misc.module.pll0_lock := io.pll0_lock
     misc.module.cacheable_check <> io.cacheable_check
 
@@ -159,13 +166,12 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
     for ((core, i) <- core_with_l2.zipWithIndex) {
       core.module.io.hartId := i.U
       io.riscv_halt(i) := core.module.io.cpu_halt
-      core.module.io.reset_vector := io.riscv_rst_vec(i)
     }
 
     if(l3cacheOpt.isEmpty || l3cacheOpt.get.rst_nodes.isEmpty){
       // tie off core soft reset
       for(node <- core_rst_nodes){
-        node.out.head._1 := false.B
+        node.out.head._1 := false.B.asAsyncReset()
       }
     }
 
@@ -187,27 +193,26 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
 
     misc.module.debug_module_io.resetCtrl.hartIsInReset := core_with_l2.map(_.module.reset.asBool)
     misc.module.debug_module_io.clock := io.clock
-    misc.module.debug_module_io.reset := io.reset
+    misc.module.debug_module_io.reset := misc.module.reset
 
-    // TODO: use synchronizer?
-    misc.module.debug_module_io.debugIO.reset := io.systemjtag.reset
+    misc.module.debug_module_io.debugIO.reset := misc.module.reset
     misc.module.debug_module_io.debugIO.clock := io.clock.asClock
     // TODO: delay 3 cycles?
     misc.module.debug_module_io.debugIO.dmactiveAck := misc.module.debug_module_io.debugIO.dmactive
     // jtag connector
     misc.module.debug_module_io.debugIO.systemjtag.foreach { x =>
       x.jtag        <> io.systemjtag.jtag
-      x.reset       := io.systemjtag.reset
+      x.reset       := jtag_reset_sync
       x.mfr_id      := io.systemjtag.mfr_id
       x.part_number := io.systemjtag.part_number
       x.version     := io.systemjtag.version
     }
 
-    withClockAndReset(io.clock.asClock, io.reset) {
+    withClockAndReset(io.clock.asClock, reset_sync) {
       // Modules are reset one by one
       // reset ----> SYNC --> {SoCMisc, L3 Cache, Cores}
       val resetChain = Seq(Seq(misc.module) ++ l3cacheOpt.map(_.module) ++ core_with_l2.map(_.module))
-      ResetGen(resetChain, io.reset, !debugOpts.FPGAPlatform)
+      ResetGen(resetChain, reset_sync, !debugOpts.FPGAPlatform)
     }
 
   }
@@ -215,9 +220,13 @@ class XSTop()(implicit p: Parameters) extends BaseXSSoc() with HasSoCParameter
 
 object TopMain extends App with HasRocketChipStageUtils {
   override def main(args: Array[String]): Unit = {
-    val (config, firrtlOpts, firrtlComplier) = ArgParser.parse(args)
+    val (config, firrtlOpts) = ArgParser.parse(args)
     val soc = DisableMonitors(p => LazyModule(new XSTop()(p)))(config)
-    Generator.execute(firrtlOpts, soc.module, firrtlComplier)
+    XiangShanStage.execute(firrtlOpts, Seq(
+      ChiselGeneratorAnnotation(() => {
+        soc.module
+      })
+    ))
     ElaborationArtefacts.files.foreach{ case (extension, contents) =>
       writeOutputFile("./build", s"XSTop.${extension}", contents())
     }

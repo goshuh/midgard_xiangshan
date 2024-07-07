@@ -26,19 +26,23 @@ SIMTOP  = top.SimTop
 IMAGE  ?= temp
 CONFIG ?= DefaultConfig
 NUM_CORES ?= 1
-MFC ?= 0
+ABS_WORK_DIR := $(shell pwd)
+# VCS sim options
+RUN_BIN_DIR ?= $(ABS_WORK_DIR)/ready-to-run
+RUN_BIN ?= coremark-2-iteration
+CONSIDER_FSDB ?= 1
 
-FPGA_MEM_ARGS = --infer-rw --repl-seq-mem -c:$(FPGATOP):-o:$(@D)/$(@F).conf --gen-mem-verilog full
-SIM_MEM_ARGS = --infer-rw --repl-seq-mem -c:$(SIMTOP):-o:$(@D)/$(@F).conf --gen-mem-verilog full
-
-# select firrtl compiler
-ifeq ($(MFC),1)
-override FC_ARGS = --mfc
-override FPGA_MEM_ARGS =
-override SIM_MEM_ARGS =
+ifdef FLASH
+	RUN_OPTS := +flash=$(RUN_BIN_DIR)/$(RUN_BIN).bin
+else
+	RUN_OPTS := +workload=$(RUN_BIN_DIR)/$(RUN_BIN).bin
 endif
-
-
+ifeq ($(CONSIDER_FSDB),1)
+	RUN_OPTS += +dump-wave=fsdb
+endif
+#RUN_OPTS += +diff=$(ABS_WORK_DIR)/ready-to-run/riscv64-nemu-interpreter-so
+RUN_OPTS += +no-diff
+RUN_OPTS += -fgp=num_threads:4,num_fsdb_threads:4
 # co-simulation with DRAMsim3
 ifeq ($(WITH_DRAMSIM3),1)
 ifndef DRAMSIM3_HOME
@@ -72,15 +76,12 @@ help:
 
 $(TOP_V): $(SCALA_FILE)
 	mkdir -p $(@D)
-	$(TIME_CMD) mill -i XiangShan.runMain $(FPGATOP) -td $(@D)  \
-		--config $(CONFIG)                                        \
-		$(FPGA_MEM_ARGS)                                          \
-		--num-cores $(NUM_CORES)                                  \
-		$(RELEASE_ARGS) $(FC_ARGS)
-	$(SED_CMD) $@
-ifeq ($(MFC),1)
-	$(AWK_CMD) $@
-endif
+	mill -i XiangShan.runMain $(FPGATOP) --target-dir $(@D)                      \
+		--config $(CONFIG) --full-stacktrace --output-file $(@F)    \
+		--infer-rw --repl-seq-mem -c:$(FPGATOP):-o:$(@D)/$(@F).conf \
+		--gen-mem-verilog full --num-cores $(NUM_CORES)             \
+		$(RELEASE_ARGS)
+	sed -i -e 's/_\(aw\|ar\|w\|r\|b\)_\(\|bits_\)/_\1/g' $@
 	@git log -n 1 >> .__head__
 	@git diff >> .__diff__
 	@sed -i 's/^/\/\// ' .__head__
@@ -97,15 +98,11 @@ $(SIM_TOP_V): $(SCALA_FILE) $(TEST_FILE)
 	mkdir -p $(@D)
 	@echo "\n[mill] Generating Verilog files..." > $(TIMELOG)
 	@date -R | tee -a $(TIMELOG)
-	$(TIME_CMD) mill -i XiangShan.test.runMain $(SIMTOP) -td $(@D)  \
-		--config $(CONFIG)                                            \
-		$(SIM_MEM_ARGS)                                               \
-		--num-cores $(NUM_CORES)                                      \
-		$(SIM_ARGS) $(FC_ARGS)
-	$(SED_CMD) $@
-ifeq ($(MFC),1)
-	$(AWK_CMD) $@
-endif
+	$(TIME_CMD) mill -i XiangShan.test.runMain $(SIMTOP) --target-dir $(@D)      \
+		--config $(CONFIG) --full-stacktrace --output-file $(@F)    \
+		--infer-rw --repl-seq-mem -c:$(SIMTOP):-o:$(@D)/$(@F).conf  \
+		--gen-mem-verilog full --num-cores $(NUM_CORES)             \
+		$(SIM_ARGS)
 	@git log -n 1 >> .__head__
 	@git diff >> .__diff__
 	@sed -i 's/^/\/\// ' .__head__
@@ -115,7 +112,9 @@ endif
 	@rm .__head__ .__diff__
 	sed -i -e 's/$$fatal/xs_assert(`__LINE__)/g' $(SIM_TOP_V)
 
+FILELIST := $(ABS_WORK_DIR)/build/cpu_flist.f
 sim-verilog: $(SIM_TOP_V)
+	find $(ABS_WORK_DIR)/build -name "*.v" > $(FILELIST)
 
 clean:
 	$(MAKE) -C ./difftest clean
@@ -143,6 +142,21 @@ emu-run:
 
 # vcs simulation
 simv:
-	$(MAKE) -C ./difftest simv SIM_TOP=SimTop DESIGN_DIR=$(NOOP_HOME) NUM_CORES=$(NUM_CORES)
+	$(MAKE) -C ./difftest simv_rtl SIM_TOP=SimTop DESIGN_DIR=$(NOOP_HOME) NUM_CORES=$(NUM_CORES)
+
+simv_rtl:
+	$(MAKE) -C ./difftest simv_rtl SIM_TOP=SimTop DESIGN_DIR=$(NOOP_HOME) NUM_CORES=$(NUM_CORES) CONSIDER_FSDB=$(CONSIDER_FSDB)
+
+simv_rtl-run:
+	$(shell if [ ! -e $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN) ];then mkdir -p $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN); fi)
+	touch sim/rtl/$(RUN_BIN)/sim.log
+	$(shell if [ -e $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN)/simv ];then rm -f $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN)/simv; fi)
+	$(shell if [ -e $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN)/simv.daidir ];then rm -rf $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN)/simv.daidir; fi)
+	ln -s $(ABS_WORK_DIR)/sim/rtl/comp/simv $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN)/simv
+	ln -s $(ABS_WORK_DIR)/sim/rtl/comp/simv.daidir $(ABS_WORK_DIR)/sim/rtl/$(RUN_BIN)/simv.daidir
+	cd sim/rtl/$(RUN_BIN) && (./simv $(RUN_OPTS) | tee -a sim.log)
+
+verdi_rtl:
+	cd sim/rtl/$(RUN_BIN) && verdi -sv -2001 +verilog2001ext+v +systemverilogext+v -ssf tb_top.vf -dbdir simv.daidir -f sim_flist.f
 
 .PHONY: verilog sim-verilog emu clean help init bump bsp $(REF_SO)

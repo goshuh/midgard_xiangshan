@@ -87,16 +87,6 @@ class FMUL_pipe(val mulLat: Int = 2)(implicit p: Parameters)
 
   val outSel = S2Reg(S1Reg(typeSel))
 
-  val s_mul :: d_mul :: Nil = FPU.ftypes.zipWithIndex.map{ case (ftype, i) =>
-    val mul = Module(new FMUL(ftype.expWidth, ftype.precision))
-    val in1 = src1
-    val in2 = Mux(fpCtrl.fmaCmd(1), invert_sign(src2, ftype.len), src2)
-    mul.io.a := in1
-    mul.io.b := in2
-    mul.io.rm := rm
-    mul
-  }
-
   toAdd.addend := S2Reg(S1Reg(io.in.bits.src(2)))
   toAdd.mul_out.zip(s3.map(_.io.to_fadd)).foreach(x => x._1 := x._2)
   toAdd.uop := uopVec.last
@@ -128,7 +118,7 @@ class FADD_pipe(val addLat: Int = 2)(implicit p: Parameters) extends FPUPipeline
   val stages = FPU.ftypes.zipWithIndex.map{
     case (t, i) =>
       val s1 = Module(new FCMA_ADD_s1(t.expWidth, 2*t.precision, t.precision))
-      val s2 = Module(new FCMA_ADD_s2(t.expWidth, t.precision, t.precision))
+      val s2 = Module(new FCMA_ADD_s2(t.expWidth, 2*t.precision, t.precision))
       val in1 = Mux(fma,
         mulProd(i).fp_prod.asUInt,
         Cat(src1(t.len - 1, 0), 0.U(t.precision.W))
@@ -137,8 +127,8 @@ class FADD_pipe(val addLat: Int = 2)(implicit p: Parameters) extends FPUPipeline
         Mux(fpCtrl.fmaCmd(0), invert_sign(src2, t.len), src2(t.len - 1, 0)),
         0.U(t.precision.W)
       )
-      s1.io.a := in1
-      s1.io.b := in2
+      s1.io.a := in2
+      s1.io.b := in1
       s1.io.b_inter_valid := fma
       s1.io.b_inter_flags := Mux(fma,
         mulProd(i).inter_flags,

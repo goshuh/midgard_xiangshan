@@ -26,12 +26,19 @@ import utils._
 @chiselName
 class Composer(implicit p: Parameters) extends BasePredictor with HasBPUConst with HasPerfEvents {
   val (components, resp) = getBPDComponents(io.in.bits.resp_in(0), p)
-  io.out.resp := resp
+  io.out := resp
+  // shorter path for s1 pred
+  val all_fast_pred = components.filter(_.is_fast_pred)
+  require(all_fast_pred.length <= 1)
+  if (all_fast_pred.length == 1) {
+    val fast_pred = all_fast_pred(0)
+    println("[composer] bypassing output of fast pred: " + fast_pred.name)
+    io.out.s1 := fast_pred.io.out.s1
+  }
 
   var metas = 0.U(1.W)
   var meta_sz = 0
   for (c <- components) {
-    c.io.reset_vector        := io.reset_vector
     c.io.in.valid            := io.in.valid
     c.io.in.bits.s0_pc       := io.in.bits.s0_pc
     c.io.in.bits.folded_hist := io.in.bits.folded_hist
@@ -55,6 +62,7 @@ class Composer(implicit p: Parameters) extends BasePredictor with HasBPUConst wi
   }
   println(s"total meta size: $meta_sz\n\n")
 
+
   io.in.ready := components.map(_.io.s1_ready).reduce(_ && _)
 
   io.s1_ready := components.map(_.io.s1_ready).reduce(_ && _)
@@ -63,11 +71,13 @@ class Composer(implicit p: Parameters) extends BasePredictor with HasBPUConst wi
   require(meta_sz < MaxMetaLength)
   io.out.last_stage_meta := metas
 
-  var update_meta = io.update.bits.meta
+  var update_meta_dup = io.update.map(_.bits.meta).toArray
   for (c <- components.reverse) {
     c.io.update := io.update
-    c.io.update.bits.meta := update_meta
-    update_meta = update_meta >> c.meta_size
+    for (i <- 0 until numDup) {
+      c.io.update(i).bits.meta := update_meta_dup(i)
+      update_meta_dup(i) = update_meta_dup(i) >> c.meta_size
+    }
   }
 
   def extractMeta(meta: UInt, idx: Int): UInt = {

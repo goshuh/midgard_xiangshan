@@ -21,20 +21,21 @@ import chisel3._
 import chisel3.util._
 import utils._
 import xiangshan._
-import xiangshan.cache.{AtomicWordIO, MemoryOpConstants, HasDCacheParameters}
+import xiangshan.cache.{AtomicWordIO, MemoryOpConstants}
 import xiangshan.cache.mmu.{TlbCmd, TlbRequestIO}
 import difftest._
 import xiangshan.ExceptionNO._
 import xiangshan.backend.fu.PMPRespBundle
+import xiangshan.backend.fu.util.SdtrigExt
 
-class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstants with HasDCacheParameters{
+class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstants with SdtrigExt{
   val io = IO(new Bundle() {
     val hartId = Input(UInt(8.W))
     val in            = Flipped(Decoupled(new ExuInput))
     val storeDataIn   = Flipped(Valid(new ExuOutput)) // src2 from rs
     val out           = Decoupled(new ExuOutput)
     val dcache        = new AtomicWordIO
-    val dtlb          = new TlbRequestIO
+    val dtlb          = new TlbRequestIO()
     val pmpResp       = Flipped(new PMPRespBundle())
     val rsIdx         = Input(UInt(log2Up(IssQueSize).W))
     val flush_sbuffer = new SbufferFlushBundle
@@ -47,7 +48,7 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
   //-------------------------------------------------------
   // Atomics Memory Accsess FSM
   //-------------------------------------------------------
-  val s_invalid :: s_tlb :: s_pm :: s_flush_sbuffer_req :: s_flush_sbuffer_resp :: s_cache_req :: s_cache_resp :: s_cache_resp_latch :: s_finish :: Nil = Enum(9)
+  val s_invalid :: s_tlb :: s_pm :: s_flush_sbuffer_req :: s_flush_sbuffer_resp :: s_cache_req :: s_cache_resp :: s_finish :: Nil = Enum(8)
   val state = RegInit(s_invalid)
   val out_valid = RegInit(false.B)
   val data_valid = RegInit(false.B)
@@ -81,6 +82,7 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
 
   io.dcache.req.valid  := false.B
   io.dcache.req.bits   := DontCare
+  io.dcache.resp.ready := false.B
 
   io.dtlb.req.valid    := false.B
   io.dtlb.req.bits     := DontCare
@@ -124,14 +126,14 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
     // keep firing until tlb hit
     io.dtlb.req.valid       := true.B
     io.dtlb.req.bits.vaddr  := in.src(0)
-    val is_lr = in.uop.ctrl.fuOpType === LSUOpType.lr_w || in.uop.ctrl.fuOpType === LSUOpType.lr_d
-    io.dtlb.req.bits.cmd    := Mux(is_lr, TlbCmd.atom_read, TlbCmd.atom_write)
-    io.dtlb.req.bits.debug.robIdx := in.uop.robIdx
+    io.dtlb.req.bits.robIdx := in.uop.robIdx
+    io.dtlb.resp.ready      := true.B
+    io.dtlb.req.bits.cmd    := Mux(isLr, TlbCmd.atom_read, TlbCmd.atom_write)
     io.dtlb.req.bits.debug.pc := in.uop.cf.pc
     io.dtlb.req.bits.debug.isFirstIssue := false.B
 
     when(io.dtlb.resp.fire){
-      paddr := io.dtlb.resp.bits.paddr
+      paddr := io.dtlb.resp.bits.paddr(0)
       // exception handling
       val addrAligned = LookupTree(in.uop.ctrl.fuOpType(1,0), List(
         "b00".U   -> true.B,              //b
@@ -142,11 +144,12 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
 
       val priv_chk = io.dtlb.resp.bits.priv && !in.uop.cf.priv
 
-      exceptionVec(storeAddrMisaligned) := !addrAligned
-      exceptionVec(storePageFault)      := io.dtlb.resp.bits.excp.pf.st
-      exceptionVec(loadPageFault)       := io.dtlb.resp.bits.excp.pf.ld
-      exceptionVec(storeAccessFault)    := io.dtlb.resp.bits.excp.af.st || priv_chk && !is_lr
-      exceptionVec(loadAccessFault)     := io.dtlb.resp.bits.excp.af.ld || priv_chk &&  is_lr
+      exceptionVec(loadAddrMisaligned)  := !addrAligned && isLr
+      exceptionVec(storeAddrMisaligned) := !addrAligned && !isLr
+      exceptionVec(storePageFault)      := io.dtlb.resp.bits.excp(0).pf.st
+      exceptionVec(loadPageFault)       := io.dtlb.resp.bits.excp(0).pf.ld
+      exceptionVec(storeAccessFault)    := io.dtlb.resp.bits.excp(0).af.st || priv_chk && !isLr
+      exceptionVec(loadAccessFault)     := io.dtlb.resp.bits.excp(0).af.ld || priv_chk &&  isLr
       exceptionVec(delayedLoadFault)    := false.B
       exceptionVec(delayedStoreFault)   := false.B
       static_pm := io.dtlb.resp.bits.static_pm
@@ -178,7 +181,7 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
     // NOTE: only handle load/store exception here, if other exception happens, don't send here
     val exception_va = exceptionVec(storePageFault) || exceptionVec(loadPageFault) ||
       exceptionVec(storeAccessFault) || exceptionVec(loadAccessFault)
-    val exception_pa = pmp.st
+    val exception_pa = pmp.st || pmp.ld
     when (exception_va || exception_pa) {
       state := s_finish
       out_valid := true.B
@@ -186,6 +189,9 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
     }.otherwise {
       state := s_flush_sbuffer_req
     }
+    // update storeAccessFault bit
+    exceptionVec(loadAccessFault) := exceptionVec(loadAccessFault) || pmp.ld && isLr
+    exceptionVec(storeAccessFault) := exceptionVec(storeAccessFault) || pmp.st || pmp.ld && !isLr
   }
 
   when (state === s_flush_sbuffer_req) {
@@ -204,10 +210,8 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
   }
 
   when (state === s_cache_req) {
-    val pipe_req = io.dcache.req.bits
-    pipe_req := DontCare
-
-    pipe_req.cmd := LookupTree(in.uop.ctrl.fuOpType, List(
+    io.dcache.req.valid := true.B
+    io.dcache.req.bits.cmd := LookupTree(in.uop.ctrl.fuOpType, List(
       LSUOpType.lr_w      -> M_XLR,
       LSUOpType.sc_w      -> M_XSC,
       LSUOpType.amoswap_w -> M_XA_SWAP,
@@ -232,79 +236,42 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
       LSUOpType.amominu_d -> M_XA_MINU,
       LSUOpType.amomaxu_d -> M_XA_MAXU
     ))
-    pipe_req.miss := false.B
-    pipe_req.probe := false.B
-    pipe_req.probe_need_data := false.B
-    pipe_req.source := AMO_SOURCE.U
-    pipe_req.addr   := get_block_addr(paddr)
-    pipe_req.vaddr  := get_block_addr(in.src(0)) // vaddr
-    pipe_req.word_idx  := get_word(paddr)
-    pipe_req.amo_data  := genWdata(in.src(1), in.uop.ctrl.fuOpType(1,0))
-    pipe_req.amo_mask  := genWmask(paddr, in.uop.ctrl.fuOpType(1,0))
 
-    io.dcache.req.valid := Mux(
-      io.dcache.req.bits.cmd === M_XLR,
-      !io.dcache.block_lr, // block lr to survive in lr storm
-      true.B
-    )
+    io.dcache.req.bits.addr := paddr
+    io.dcache.req.bits.vaddr := in.src(0) // vaddr
+    io.dcache.req.bits.data := genWdata(in.src(1), in.uop.ctrl.fuOpType(1,0))
+    // TODO: atomics do need mask: fix mask
+    io.dcache.req.bits.mask := genWmask(paddr, in.uop.ctrl.fuOpType(1,0))
+    io.dcache.req.bits.id   := DontCare
 
     when(io.dcache.req.fire){
       state := s_cache_resp
-      paddr_reg := paddr
-      data_reg := io.dcache.req.bits.amo_data
-      mask_reg := io.dcache.req.bits.amo_mask
+      paddr_reg := io.dcache.req.bits.addr
+      data_reg := io.dcache.req.bits.data
+      mask_reg := io.dcache.req.bits.mask
       fuop_reg := in.uop.ctrl.fuOpType
     }
   }
 
-  val dcache_resp_data  = Reg(UInt())
-  val dcache_resp_id    = Reg(UInt())
-  val dcache_resp_error = Reg(Bool())
-  val dcache_resp_l2_err = Reg(Bool())
-
   when (state === s_cache_resp) {
-    // when not miss
-    // everything is OK, simply send response back to sbuffer
-    // when miss and not replay
-    // wait for missQueue to handling miss and replaying our request
-    // when miss and replay
-    // req missed and fail to enter missQueue, manually replay it later
-    // TODO: add assertions:
-    // 1. add a replay delay counter?
-    // 2. when req gets into MissQueue, it should not miss any more
-    when(io.dcache.resp.fire()) {
-      when(io.dcache.resp.bits.miss) {
-        when(io.dcache.resp.bits.replay) {
-          state := s_cache_req
-        }
-      } .otherwise {
-        // latch response
-        dcache_resp_data := io.dcache.resp.bits.data
-        dcache_resp_id := io.dcache.resp.bits.id
-        dcache_resp_error := io.dcache.resp.bits.error
-        dcache_resp_l2_err := io.dcache.resp.bits.l2_err
-        state := s_cache_resp_latch
-      }
-    }
-  }
-
-  when(state === s_cache_resp_latch) {
-    when(data_valid) {
-      is_lrsc_valid :=  dcache_resp_id
+    io.dcache.resp.ready := data_valid
+    when(io.dcache.resp.fire) {
+      is_lrsc_valid := io.dcache.resp.bits.id
+      val rdata = io.dcache.resp.bits.data
       val rdataSel = LookupTree(paddr(2, 0), List(
-        "b000".U -> dcache_resp_data(63, 0),
-        "b001".U -> dcache_resp_data(63, 8),
-        "b010".U -> dcache_resp_data(63, 16),
-        "b011".U -> dcache_resp_data(63, 24),
-        "b100".U -> dcache_resp_data(63, 32),
-        "b101".U -> dcache_resp_data(63, 40),
-        "b110".U -> dcache_resp_data(63, 48),
-        "b111".U -> dcache_resp_data(63, 56)
+        "b000".U -> rdata(63, 0),
+        "b001".U -> rdata(63, 8),
+        "b010".U -> rdata(63, 16),
+        "b011".U -> rdata(63, 24),
+        "b100".U -> rdata(63, 32),
+        "b101".U -> rdata(63, 40),
+        "b110".U -> rdata(63, 48),
+        "b111".U -> rdata(63, 56)
       ))
 
       resp_data_wire := LookupTree(in.uop.ctrl.fuOpType, List(
         LSUOpType.lr_w      -> SignExt(rdataSel(31, 0), XLEN),
-        LSUOpType.sc_w      -> dcache_resp_data,
+        LSUOpType.sc_w      -> rdata,
         LSUOpType.amoswap_w -> SignExt(rdataSel(31, 0), XLEN),
         LSUOpType.amoadd_w  -> SignExt(rdataSel(31, 0), XLEN),
         LSUOpType.amoxor_w  -> SignExt(rdataSel(31, 0), XLEN),
@@ -316,7 +283,7 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
         LSUOpType.amomaxu_w -> SignExt(rdataSel(31, 0), XLEN),
 
         LSUOpType.lr_d      -> SignExt(rdataSel(63, 0), XLEN),
-        LSUOpType.sc_d      -> dcache_resp_data,
+        LSUOpType.sc_d      -> rdata,
         LSUOpType.amoswap_d -> SignExt(rdataSel(63, 0), XLEN),
         LSUOpType.amoadd_d  -> SignExt(rdataSel(63, 0), XLEN),
         LSUOpType.amoxor_d  -> SignExt(rdataSel(63, 0), XLEN),
@@ -328,14 +295,14 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
         LSUOpType.amomaxu_d -> SignExt(rdataSel(63, 0), XLEN)
       ))
 
-      when (dcache_resp_error && !dcache_resp_l2_err && io.csrCtrl.cache_error_enable) {
-        exceptionVec(loadAccessFault)  := isLr
-        exceptionVec(storeAccessFault) := !isLr
-        assert(!exceptionVec(loadAccessFault))
-        assert(!exceptionVec(storeAccessFault))
-      }
+      // when (io.dcache.resp.bits.error && io.csrCtrl.cache_error_enable) {
+      //   exceptionVec(loadAccessFault)  := isLr
+      //   exceptionVec(storeAccessFault) := !isLr
+      //   assert(!exceptionVec(loadAccessFault))
+      //   assert(!exceptionVec(storeAccessFault))
+      // }
 
-      when (dcache_resp_l2_err) {
+      when (io.dcache.resp.bits.l2_err) {
         exceptionVec(delayedLoadFault ) :=  isLr
         exceptionVec(delayedStoreFault) := !isLr
         atom_override_xtval   := true.B
@@ -373,86 +340,69 @@ class AtomicsUnit(implicit p: Parameters) extends XSModule with MemoryOpConstant
 
   // atomic trigger
   val csrCtrl = io.csrCtrl
-  val tdata = Reg(Vec(6, new MatchTriggerIO))
-  val tEnable = RegInit(VecInit(Seq.fill(6)(false.B)))
-  val en = csrCtrl.trigger_enable
-  tEnable := VecInit(en(2), en (3), en(7), en(4), en(5), en(9))
-  when(csrCtrl.mem_trigger.t.valid) {
-    tdata(csrCtrl.mem_trigger.t.bits.addr) := csrCtrl.mem_trigger.t.bits.tdata
+  val tdata = Reg(Vec(TriggerNum, new MatchTriggerIO))
+  val tEnableVec = RegInit(VecInit(Seq.fill(TriggerNum)(false.B)))
+  tEnableVec := csrCtrl.mem_trigger.tEnableVec
+  when(csrCtrl.mem_trigger.tUpdate.valid) {
+    tdata(csrCtrl.mem_trigger.tUpdate.bits.addr) := csrCtrl.mem_trigger.tUpdate.bits.tdata
   }
-  val lTriggerMapping = Map(0 -> 2, 1 -> 3, 2 -> 5)
-  val sTriggerMapping = Map(0 -> 0, 1 -> 1, 2 -> 4)
+//  val lTriggerMapping = Map(0 -> 2, 1 -> 3, 2 -> 5)
+//  val sTriggerMapping = Map(0 -> 0, 1 -> 1, 2 -> 4)
 
-  val backendTriggerHitReg = Reg(Vec(6, Bool()))
-  backendTriggerHitReg := VecInit(Seq.fill(6)(false.B))
+  val frontendTriggerTimingVec  = in.uop.cf.trigger.frontendTiming
+  val frontendTriggerChainVec   = in.uop.cf.trigger.frontendChain
+  val frontendTriggerHitVec     = in.uop.cf.trigger.frontendHit
 
+  val backendTriggerTimingVec   = tdata.map(_.timing)
+  val backendTriggerChainVec    = tdata.map(_.chain)
+  val backendTriggerHitVec      = WireInit(VecInit(Seq.fill(TriggerNum)(false.B)))
+
+  val triggerTimingVec  = VecInit(backendTriggerTimingVec.zip(frontendTriggerTimingVec).map { case (b, f) => b || f })
+  val triggerChainVec   = VecInit(backendTriggerChainVec.zip(frontendTriggerChainVec).map { case (b, f) => b || f })
+  val triggerHitVec     = Reg(Vec(TriggerNum, Bool()))
+  triggerHitVec         := VecInit(backendTriggerHitVec.zip(frontendTriggerHitVec).map { case (b, f) => b || f })
+
+  val triggerCanFireVec = RegInit(VecInit(Seq.fill(TriggerNum)(false.B)))
   when(state === s_cache_req){
     // store trigger
-    val store_hit = Wire(Vec(3, Bool()))
-    for (j <- 0 until 3) {
-        store_hit(j) := !tdata(sTriggerMapping(j)).select && TriggerCmp(
-          vaddr,
-          tdata(sTriggerMapping(j)).tdata2,
-          tdata(sTriggerMapping(j)).matchType,
-          tEnable(sTriggerMapping(j))
-        )
-       backendTriggerHitReg(sTriggerMapping(j)) := store_hit(j)
-     }
-
-    when(tdata(0).chain) {
-      backendTriggerHitReg(0) := store_hit(0) && store_hit(1)
-      backendTriggerHitReg(1) := store_hit(0) && store_hit(1)
-    }
-
-    when(!in.uop.cf.trigger.backendEn(0)) {
-      backendTriggerHitReg(4) := false.B
-    }
-
-    // load trigger
-    val load_hit = Wire(Vec(3, Bool()))
-    for (j <- 0 until 3) {
-
-      val addrHit = TriggerCmp(
+    val store_hit = Wire(Vec(TriggerNum, Bool()))
+    for (j <- 0 until TriggerNum) {
+      store_hit(j) := !tdata(j).select && TriggerCmp(
         vaddr,
-        tdata(lTriggerMapping(j)).tdata2,
-        tdata(lTriggerMapping(j)).matchType,
-        tEnable(lTriggerMapping(j))
+        tdata(j).tdata2,
+        tdata(j).matchType,
+        tEnableVec(j) && tdata(j).store
       )
-      load_hit(j) := addrHit && !tdata(lTriggerMapping(j)).select
-      backendTriggerHitReg(lTriggerMapping(j)) := load_hit(j)
     }
-    when(tdata(2).chain) {
-      backendTriggerHitReg(2) := load_hit(0) && load_hit(1)
-      backendTriggerHitReg(3) := load_hit(0) && load_hit(1)
+    // load trigger
+    val load_hit = Wire(Vec(TriggerNum, Bool()))
+    for (j <- 0 until TriggerNum) {
+      load_hit(j) := !tdata(j).select && TriggerCmp(
+        vaddr,
+        tdata(j).tdata2,
+        tdata(j).matchType,
+        tEnableVec(j) && tdata(j).load
+      )
     }
-    when(!in.uop.cf.trigger.backendEn(1)) {
-      backendTriggerHitReg(5) := false.B
-    }
+    backendTriggerHitVec := store_hit.zip(load_hit).map{ case(sh, lh) => sh || lh }
+    // triggerCanFireVec will update at T+1
+    TriggerCheckCanFire(TriggerNum, triggerCanFireVec, triggerHitVec, triggerTimingVec, triggerChainVec)
   }
 
   // addr trigger do cmp at s_cache_req
   // trigger result is used at s_finish
   // thus we can delay it safely
-  io.out.bits.uop.cf.trigger.backendHit := VecInit(Seq.fill(6)(false.B))
-  when(isLr){
-    // enable load trigger
-    io.out.bits.uop.cf.trigger.backendHit(2) := backendTriggerHitReg(2)
-    io.out.bits.uop.cf.trigger.backendHit(3) := backendTriggerHitReg(3)
-    io.out.bits.uop.cf.trigger.backendHit(5) := backendTriggerHitReg(5)
-  }.otherwise{
-    // enable store trigger
-    io.out.bits.uop.cf.trigger.backendHit(0) := backendTriggerHitReg(0)
-    io.out.bits.uop.cf.trigger.backendHit(1) := backendTriggerHitReg(1)
-    io.out.bits.uop.cf.trigger.backendHit(4) := backendTriggerHitReg(4)
-  }
+
+  io.out.bits.uop.cf.trigger.backendHit     := triggerHitVec
+  io.out.bits.uop.cf.trigger.backendCanFire := triggerCanFireVec
 
   if (env.EnableDifftest) {
     val difftest = Module(new DifftestAtomicEvent)
     difftest.io.clock      := clock
     difftest.io.reset      := reset
     difftest.io.coreid     := io.hartId
-    difftest.io.atomicResp := (state === s_cache_resp_latch && data_valid)
-    difftest.io.atomicErr  := dcache_resp_l2_err
+    difftest.io.atomicResp := io.dcache.resp.fire
+    difftest.io.atomicErr  := io.dcache.resp.bits.l2_err
     difftest.io.atomicAddr := paddr_reg
     difftest.io.atomicData := data_reg
     difftest.io.atomicMask := mask_reg

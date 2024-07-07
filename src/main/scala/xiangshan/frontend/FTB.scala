@@ -25,6 +25,7 @@ import utils._
 import chisel3.experimental.chiselName
 
 import scala.math.min
+import scala.{Tuple2 => &}
 import os.copy
 
 
@@ -239,14 +240,16 @@ class FTBEntryWithTag(implicit p: Parameters) extends XSBundle with FTBParams wi
 class FTBMeta(implicit p: Parameters) extends XSBundle with FTBParams {
   val writeWay = UInt(log2Ceil(numWays).W)
   val hit = Bool()
+  val fauFtbHit = if (EnableFauFTB) Some(Bool()) else None
   val pred_cycle = if (!env.FPGAPlatform) Some(UInt(64.W)) else None
 }
 
 object FTBMeta {
-  def apply(writeWay: UInt, hit: Bool, pred_cycle: UInt)(implicit p: Parameters): FTBMeta = {
+  def apply(writeWay: UInt, hit: Bool, fauhit: Bool, pred_cycle: UInt)(implicit p: Parameters): FTBMeta = {
     val e = Wire(new FTBMeta)
     e.writeWay := writeWay
     e.hit := hit
+    e.fauFtbHit.map(_ := fauhit)
     e.pred_cycle.map(_ := pred_cycle)
     e
   }
@@ -405,48 +408,75 @@ class FTB(implicit p: Parameters) extends BasePredictor with FTBParams with BPUU
 
   val ftbBank = Module(new FTBBank(numSets, numWays))
 
-  ftbBank.io.req_pc.valid := io.s0_fire
-  ftbBank.io.req_pc.bits := s0_pc
+  ftbBank.io.req_pc.valid := io.s0_fire(dupForFtb)
+  ftbBank.io.req_pc.bits := s0_pc_dup(dupForFtb)
 
-  val ftb_entry = RegEnable(ftbBank.io.read_resp, io.s1_fire)
-  val s3_ftb_entry = RegEnable(ftb_entry, io.s2_fire)
-  val s1_hit = ftbBank.io.read_hits.valid && io.ctrl.btb_enable
-  val s2_hit = RegEnable(s1_hit, io.s1_fire)
-  val s3_hit = RegEnable(s2_hit, io.s2_fire)
+  val btb_enable_dup = RegNext(dup(io.ctrl.btb_enable))
+  val s2_ftb_entry_dup = io.s1_fire.map(f => RegEnable(ftbBank.io.read_resp, f))
+  val s3_ftb_entry_dup = io.s2_fire.zip(s2_ftb_entry_dup).map {case (f, e) => RegEnable(e, f)}
+  
+  val s1_ftb_hit = ftbBank.io.read_hits.valid && io.ctrl.btb_enable
+  val s1_uftb_hit_dup = io.in.bits.resp_in(0).s1.full_pred.map(_.hit)
+  val s2_ftb_hit_dup = io.s1_fire.map(f => RegEnable(s1_ftb_hit, f))
+  val s2_uftb_hit_dup =
+    if (EnableFauFTB) {
+      io.s1_fire.zip(s1_uftb_hit_dup).map {case (f, h) => RegEnable(h, f)}
+    } else {
+      s2_ftb_hit_dup
+    }
+  val s2_real_hit_dup = s2_ftb_hit_dup.zip(s2_uftb_hit_dup).map(tp => tp._1 || tp._2)
+  val s3_hit_dup = io.s2_fire.zip(s2_real_hit_dup).map {case (f, h) => RegEnable(h, f)}
   val writeWay = ftbBank.io.read_hits.bits
 
-  val fallThruAddr = getFallThroughAddr(s2_pc, ftb_entry.carry, ftb_entry.pftAddr)
-
   // io.out.bits.resp := RegEnable(io.in.bits.resp_in(0), 0.U.asTypeOf(new BranchPredictionResp), io.s1_fire)
-  io.out.resp := io.in.bits.resp_in(0)
+  io.out := io.in.bits.resp_in(0)
 
   val s1_latch_call_is_rvc   = DontCare // TODO: modify when add RAS
 
-  io.out.resp.s2.full_pred.hit       := s2_hit
-  io.out.resp.s2.pc                  := s2_pc
-  io.out.resp.s2.ftb_entry           := ftb_entry
-  io.out.resp.s2.full_pred.fromFtbEntry(ftb_entry, s2_pc, Some((s1_pc, io.s1_fire)))
-  io.out.resp.s2.is_minimal := false.B
+  io.out.s2.full_pred.zip(s2_real_hit_dup).map {case (fp, h) => fp.hit := h}
+  val s2_uftb_full_pred_dup = io.s1_fire.zip(io.in.bits.resp_in(0).s1.full_pred).map {case (f, fp) => RegEnable(fp, f)}
+  for (full_pred & s2_ftb_entry & s2_pc & s1_pc & s1_fire & s2_uftb_full_pred & s2_hit & s2_uftb_hit <-
+    io.out.s2.full_pred zip s2_ftb_entry_dup zip s2_pc_dup zip s1_pc_dup zip io.s1_fire zip s2_uftb_full_pred_dup zip
+    s2_ftb_hit_dup zip s2_uftb_hit_dup) {
+      if (EnableFauFTB) {
+        // use uftb pred when ftb not hit but uftb hit
+        when (!s2_hit && s2_uftb_hit) {
+          full_pred := s2_uftb_full_pred
+        }.otherwise {
+          full_pred.fromFtbEntry(s2_ftb_entry, s2_pc, Some((s1_pc, s1_fire)))
+        }
+      } else {
+        full_pred.fromFtbEntry(s2_ftb_entry, s2_pc, Some((s1_pc, s1_fire)))
+      }
+    }
 
-  io.out.resp.s3.full_pred.hit := s3_hit
-  io.out.resp.s3.pc                  := s3_pc
-  io.out.resp.s3.ftb_entry           := s3_ftb_entry
-  io.out.resp.s3.full_pred.fromFtbEntry(s3_ftb_entry, s3_pc, Some((s2_pc, io.s2_fire)))
-  io.out.resp.s3.is_minimal := false.B
+  // s3 
+  val s3_full_pred = io.s2_fire.zip(io.out.s2.full_pred).map {case (f, fp) => RegEnable(fp, f)}
+  // br_taken_mask from SC in stage3 is covered here, will be recovered in always taken logic
+  io.out.s3.full_pred := s3_full_pred
 
-  io.out.last_stage_meta := RegEnable(RegEnable(FTBMeta(writeWay.asUInt(), s1_hit, GTimer()).asUInt(), io.s1_fire), io.s2_fire)
+  val s3_fauftb_hit_ftb_miss = RegEnable(!s2_ftb_hit_dup(dupForFtb) && s2_uftb_hit_dup(dupForFtb), io.s2_fire(dupForFtb))
+  io.out.last_stage_ftb_entry := Mux(s3_fauftb_hit_ftb_miss, io.in.bits.resp_in(0).last_stage_ftb_entry, s3_ftb_entry_dup(dupForFtb))
+  io.out.last_stage_meta := RegEnable(RegEnable(FTBMeta(writeWay.asUInt(), s1_ftb_hit, s1_uftb_hit_dup(dupForFtb), GTimer()).asUInt(), io.s1_fire(dupForFtb)), io.s2_fire(dupForFtb))
 
   // always taken logic
   for (i <- 0 until numBr) {
-    io.out.resp.s2.full_pred.br_taken_mask(i) := io.in.bits.resp_in(0).s2.full_pred.br_taken_mask(i) || s2_hit && ftb_entry.always_taken(i)
-    io.out.resp.s3.full_pred.br_taken_mask(i) := io.in.bits.resp_in(0).s3.full_pred.br_taken_mask(i) || s3_hit && s3_ftb_entry.always_taken(i)
+    for (out_fp & in_fp & s2_hit & s2_ftb_entry <-
+      io.out.s2.full_pred zip io.in.bits.resp_in(0).s2.full_pred zip s2_ftb_hit_dup zip s2_ftb_entry_dup)
+      out_fp.br_taken_mask(i) := in_fp.br_taken_mask(i) || s2_hit && s2_ftb_entry.always_taken(i)
+    for (out_fp & in_fp & s3_hit & s3_ftb_entry <-
+      io.out.s3.full_pred zip io.in.bits.resp_in(0).s3.full_pred zip s3_hit_dup zip s3_ftb_entry_dup)
+      out_fp.br_taken_mask(i) := in_fp.br_taken_mask(i) || s3_hit && s3_ftb_entry.always_taken(i)
   }
 
   // Update logic
-  val update = io.update.bits
+  val u = io.update(dupForFtb)
+  val update = u.bits
 
   val u_meta = update.meta.asTypeOf(new FTBMeta)
-  val u_valid = io.update.valid && !io.update.bits.old_entry
+  // we do not update ftb on fauFtb hit and ftb miss
+  val update_uftb_hit_ftb_miss = u_meta.fauFtbHit.getOrElse(false.B) && !u_meta.hit
+  val u_valid = u.valid && !u.bits.old_entry && !(update_uftb_hit_ftb_miss)
 
   val delay2_pc = DelayN(update.pc, 2)
   val delay2_entry = DelayN(update.ftb_entry, 2)
@@ -474,29 +504,31 @@ class FTB(implicit p: Parameters) extends BasePredictor with FTBParams with BPUU
   ftbBank.io.update_write_way   := Mux(update_now, u_meta.writeWay, RegNext(ftbBank.io.update_hits.bits)) // use it one cycle later
   ftbBank.io.update_write_alloc := Mux(update_now, false.B,         RegNext(!ftbBank.io.update_hits.valid)) // use it one cycle later
   ftbBank.io.update_access := u_valid && !u_meta.hit
-  ftbBank.io.s1_fire := io.s1_fire
+  ftbBank.io.s1_fire := io.s1_fire(dupForFtb)
 
-  XSDebug("req_v=%b, req_pc=%x, ready=%b (resp at next cycle)\n", io.s0_fire, s0_pc, ftbBank.io.req_pc.ready)
-  XSDebug("s2_hit=%b, hit_way=%b\n", s2_hit, writeWay.asUInt)
+  XSDebug("req_v=%b, req_pc=%x, ready=%b (resp at next cycle)\n", io.s0_fire(dupForFtb), s0_pc_dup(dupForFtb), ftbBank.io.req_pc.ready)
+  XSDebug("s2_hit=%b, hit_way=%b\n", s2_ftb_hit_dup(dupForFtb), writeWay.asUInt)
   XSDebug("s2_br_taken_mask=%b, s2_real_taken_mask=%b\n",
-    io.in.bits.resp_in(0).s2.full_pred.br_taken_mask.asUInt, io.out.resp.s2.full_pred.real_slot_taken_mask().asUInt)
-  XSDebug("s2_target=%x\n", io.out.resp.s2.getTarget)
+    io.in.bits.resp_in(dupForFtb).s2.full_pred(dupForFtb).br_taken_mask.asUInt, io.out.s2.full_pred(dupForFtb).real_slot_taken_mask().asUInt)
+  XSDebug("s2_target=%x\n", io.out.s2.target(dupForFtb))
 
-  ftb_entry.display(true.B)
+  s2_ftb_entry_dup(dupForFtb).display(true.B)
 
-  XSPerfAccumulate("ftb_read_hits", RegNext(io.s0_fire) && s1_hit)
-  XSPerfAccumulate("ftb_read_misses", RegNext(io.s0_fire) && !s1_hit)
+  XSPerfAccumulate("ftb_read_hits", RegNext(io.s0_fire(dupForFtb)) && s1_ftb_hit)
+  XSPerfAccumulate("ftb_read_misses", RegNext(io.s0_fire(dupForFtb)) && !s1_ftb_hit)
 
-  XSPerfAccumulate("ftb_commit_hits", io.update.valid && u_meta.hit)
-  XSPerfAccumulate("ftb_commit_misses", io.update.valid && !u_meta.hit)
+  XSPerfAccumulate("ftb_commit_hits", u.valid && u_meta.hit)
+  XSPerfAccumulate("ftb_commit_misses", u.valid && !u_meta.hit)
 
-  XSPerfAccumulate("ftb_update_req", io.update.valid)
-  XSPerfAccumulate("ftb_update_ignored", io.update.valid && io.update.bits.old_entry)
+  XSPerfAccumulate("ftb_update_req", u.valid)
+
+  XSPerfAccumulate("ftb_update_ignored_old_entry", u.valid && u.bits.old_entry)
+  XSPerfAccumulate("ftb_update_ignored_fauftb_hit", u.valid && update_uftb_hit_ftb_miss)
   XSPerfAccumulate("ftb_updated", u_valid)
 
   override val perfEvents = Seq(
-    ("ftb_commit_hits            ", RegNext(io.update.valid)  &&  u_meta.hit),
-    ("ftb_commit_misses          ", RegNext(io.update.valid)  && !u_meta.hit),
+    ("ftb_commit_hits            ", u.valid  &&  u_meta.hit),
+    ("ftb_commit_misses          ", u.valid  && !u_meta.hit),
   )
   generatePerfEvent()
 }

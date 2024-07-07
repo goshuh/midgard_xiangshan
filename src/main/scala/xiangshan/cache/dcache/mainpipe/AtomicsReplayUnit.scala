@@ -21,6 +21,19 @@ import chisel3._
 import chisel3.util._
 import utils.XSDebug
 
+class AtomicsResp(implicit p: Parameters) extends DCacheBundle {
+  val data    = UInt(DataBits.W)
+  val miss    = Bool()
+  val miss_id = UInt(log2Up(cfg.nMissEntries).W)
+  val replay  = Bool()
+  val error   = Bool()
+  val l2_err  = Bool()
+
+  val ack_miss_queue = Bool()
+
+  val id     = UInt(reqIdWidth.W)
+}
+
 class AtomicsReplayEntry(implicit p: Parameters) extends DCacheModule
 {
   val io = IO(new Bundle {
@@ -131,13 +144,13 @@ class AtomicsReplayEntry(implicit p: Parameters) extends DCacheModule
   }
 
   // debug output
-  // when (io.lsu.req.fire()) {
-  //   io.lsu.req.bits.dump()
-  // }
+  when (io.lsu.req.fire()) {
+    io.lsu.req.bits.dump()
+  }
 
-  // when (io.lsu.resp.fire()) {
-  //   io.lsu.resp.bits.dump()
-  // }
+  when (io.lsu.resp.fire()) {
+    io.lsu.resp.bits.dump()
+  }
 
 //  when (io.pipe_req.fire()) {
 //    io.pipe_req.bits.dump()

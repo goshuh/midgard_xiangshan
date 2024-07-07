@@ -24,7 +24,7 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
       "ttw",
       sourceId = IdRange(0, mgFSParam.ttwNum)
     )),
-    requestFields = Seq(VTDIField())
+    requestFields = Seq(UATField())
   )))
 
   lazy val module = new LazyModuleImp(this) with HasPerfEvents {
@@ -83,7 +83,7 @@ class FSTTWWrapper(P: Param)(implicit p: Parameters) extends LazyModule
                                           6.U)._2
 
     // inform the vlb directory
-    mem.a.bits.user.lift(VTDIKey).foreach(_ := true.B)
+    mem.a.bits.user.lift(UATKey).foreach(_ := true.B)
 
     u_ttw.mem_req_o.ready     := mem.a.ready
 

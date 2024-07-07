@@ -50,7 +50,7 @@ class SRT16DividerDataModule(len: Int) extends Module {
   val quot_neg_2 :: quot_neg_1 :: quot_0 :: quot_pos_1 :: quot_pos_2 :: Nil = Enum(5)
 
 
-  val state = RegInit(UIntToOH(s_idle, 7))
+  val state = RegInit((1 << s_idle.litValue.toInt).U(7.W))
 
   // reused wires
 //  val aNormAbs = Wire(UInt((len + 1).W)) // Inputs of xNormAbs regs below
@@ -147,10 +147,11 @@ class SRT16DividerDataModule(len: Int) extends Module {
   val aIsZero = RegEnable(aLZC(lzc_width), state(s_pre_0))
   val aTooSmall = RegEnable(aLZC(lzc_width) | lzcWireDiff(lzc_width), state(s_pre_0))
   special := dIsOne | dIsZero | aTooSmall
+  val aRegNeg = RegEnable(-aReg, state(s_pre_0))
 
   val quotSpecial = Mux(dIsZero, VecInit(Seq.fill(len)(true.B)).asUInt,
                             Mux(aTooSmall, 0.U,
-                              Mux(dSignReg, -aReg, aReg) //  signed 2^(len-1)
+                              Mux(dSignReg, aRegNeg, aReg) //  signed 2^(len-1)
                             ))
   val remSpecial = Mux(dIsZero || aTooSmall, aReg, 0.U)
   val quotSpecialReg = RegEnable(quotSpecial, state(s_pre_1))

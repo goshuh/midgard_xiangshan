@@ -52,7 +52,7 @@ class Dispatch2Rs(val configs: Seq[Seq[ExuConfig]])(implicit p: Parameters) exte
   lazy val module = Dispatch2RsImp(this, supportedDpMode.zipWithIndex.filter(_._1).head._2)
 }
 
-class Dispatch2RsImp(outer: Dispatch2Rs)(implicit p: Parameters) extends LazyModuleImp(outer) with HasXSParameter {
+class Dispatch2RsImp(outer: Dispatch2Rs)(implicit p: Parameters) extends LazyModuleImp(outer) {
   val numIntStateRead = outer.numIntStateRead
   val numFpStateRead = outer.numFpStateRead
 
@@ -105,14 +105,14 @@ class Dispatch2RsLessExuImp(outer: Dispatch2Rs)(implicit p: Parameters) extends 
 
   val enableLoadBalance = outer.numOut > 2
   val numPingPongBits = outer.numOut / 2
-  val pingpong = Seq.fill(numPingPongBits)(RegInit(false.B))
-  pingpong.foreach(p => p := !p)
+  val pingpong_dup = Seq.fill(outer.numOut)(Seq.fill(numPingPongBits)(RegInit(false.B)))
+  pingpong_dup.foreach(_.foreach(p => p := !p))
   val pairIndex = (0 until outer.numOut).map(i => (i + 2) % outer.numOut)
 
   def needLoadBalance(index: Int): Bool = {
     val bitIndex = Seq(index, pairIndex(index), numPingPongBits - 1).min
     // When ping pong bit is set, use pairIndex
-    if (enableLoadBalance) pingpong(bitIndex) && (index != pairIndex(index)).B else false.B
+    if (enableLoadBalance) pingpong_dup(index)(bitIndex) && (index != pairIndex(index)).B else false.B
   }
   // out is directly connected from in for better timing
   // TODO: select critical instruction first
@@ -172,7 +172,6 @@ class Dispatch2RsLessExuImp(outer: Dispatch2Rs)(implicit p: Parameters) extends 
 }
 
 class Dispatch2RsDistinctImp(outer: Dispatch2Rs)(implicit p: Parameters) extends Dispatch2RsImp(outer) {
-  require(LoadPipelineWidth == StorePipelineWidth)
   // in: to deal with lsq
   // in.valid: can leave dispatch queue (not blocked by lsq)
   // in.ready: can enter rs
@@ -183,7 +182,8 @@ class Dispatch2RsDistinctImp(outer: Dispatch2Rs)(implicit p: Parameters) extends
   // add one pipeline before out
   val s0_out = Wire(io.out.cloneType)
   // dirty code for lsq enq
-  val is_blocked = WireDefault(VecInit(Seq.fill(io.in.length)(false.B)))
+  val is_blocked = Wire(Vec(io.in.length, Bool()))
+  is_blocked.foreach(_ := false.B)
   if (io.enqLsq.isDefined) {
     val enqLsq = io.enqLsq.get
     val fuType = io.in.map(_.bits.ctrl.fuType)
@@ -191,27 +191,28 @@ class Dispatch2RsDistinctImp(outer: Dispatch2Rs)(implicit p: Parameters) extends
     val isStore = fuType.map(f => FuType.isStoreExu(f))
     val isAMO = fuType.map(f => FuType.isAMO(f))
 
-    val isLoadArrays = Seq.tabulate(io.in.length)(Seq.tabulate(_)(i => io.in(i).valid && !isStore(i)))
-    val isStoreArrays = Seq.tabulate(io.in.length)(Seq.tabulate(_)(i => io.in(i).valid && isStore(i)))
-    val blockLoads = isLoadArrays.map(PopCount(_) >= LoadPipelineWidth.U)
-    val blockStores = isStoreArrays.map(PopCount(_) >= StorePipelineWidth.U)
-
+    def isBlocked(index: Int): Bool = {
+      if (index >= 2) {
+        val pairs = (0 until index).flatMap(i => (i + 1 until index).map(j => (i, j)))
+        val foundLoad = pairs.map(x => io.in(x._1).valid && io.in(x._2).valid && !isStore(x._1) && !isStore(x._2))
+        val foundStore = pairs.map(x => io.in(x._1).valid && io.in(x._2).valid && isStore(x._1) && isStore(x._2))
+        Mux(isStore(index), VecInit(foundStore).asUInt.orR, VecInit(foundLoad).asUInt.orR) || isBlocked(index - 1)
+      }
+      else {
+        false.B
+      }
+    }
     for (i <- io.in.indices) {
-      is_blocked(i) := (
-        if (i >= LoadPipelineWidth) Mux(isStore(i), blockStores(i), blockLoads(i)) || is_blocked(i - 1)
-        else false.B
-      )
+      is_blocked(i) := isBlocked(i)
       in(i).valid := io.in(i).valid && !is_blocked(i)
       io.in(i).ready := in(i).ready && !is_blocked(i)
 
-      if (i < enqLsq.req.length) {
-        enqLsq.needAlloc(i) := Mux(io.in(i).valid && isLs(i), Mux(isStore(i) && !isAMO(i), 2.U, 1.U), 0.U)
-        enqLsq.req(i).bits := io.in(i).bits
-        in(i).bits.lqIdx := enqLsq.resp(i).lqIdx
-        in(i).bits.sqIdx := enqLsq.resp(i).sqIdx
+      enqLsq.needAlloc(i) := Mux(io.in(i).valid && isLs(i), Mux(isStore(i) && !isAMO(i), 2.U, 1.U), 0.U)
+      enqLsq.req(i).bits := io.in(i).bits
+      in(i).bits.lqIdx := enqLsq.resp(i).lqIdx
+      in(i).bits.sqIdx := enqLsq.resp(i).sqIdx
 
-        enqLsq.req(i).valid := in(i).valid && VecInit(s0_out.map(_.ready)).asUInt.andR
-      }
+      enqLsq.req(i).valid := in(i).valid && VecInit(s0_out.map(_.ready)).asUInt.andR
     }
   }
 
@@ -226,7 +227,7 @@ class Dispatch2RsDistinctImp(outer: Dispatch2Rs)(implicit p: Parameters) extends
       s0_out(idx).bits := Mux1H(selectIdxOH, in.map(_.bits))
       // Special case for STD
       if (config.contains(StdExeUnitCfg)) {
-        val sta = s0_out(idx - StorePipelineWidth)
+        val sta = s0_out(idx - 2)
         sta.valid := s0_out(idx).valid
         s0_out(idx).bits.ctrl.srcType(0) := s0_out(idx).bits.ctrl.srcType(1)
         s0_out(idx).bits.psrc(0) := s0_out(idx).bits.psrc(1)

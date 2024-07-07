@@ -25,27 +25,44 @@ import utils.XSDebug
 
 trait HasCSRConst {
 
-  // User Trap Setup
-  val Ustatus       = 0x000
-  val Uie           = 0x004
-  val Utvec         = 0x005
-
-  // User Trap Handling
-  val Uscratch      = 0x040
-  val Uepc          = 0x041
-  val Ucause        = 0x042
-  val Utval         = 0x043
-  val Uip           = 0x044
-
-  // User Floating-Point CSRs (not implemented)
+  // Unprivileged Floating-Point CSRs
   val Fflags        = 0x001
   val Frm           = 0x002
   val Fcsr          = 0x003
 
-  // User Counter/Timers
+  // Unprivileged Counter/Timers
   val Cycle         = 0xC00
   val Time          = 0xC01
   val Instret       = 0xC02
+  val Hpmcounter3   = 0xC03
+  val Hpmcounter4   = 0xC04
+  val Hpmcounter5   = 0xC05
+  val Hpmcounter6   = 0xC06
+  val Hpmcounter7   = 0xC07
+  val Hpmcounter8   = 0xC08
+  val Hpmcounter9   = 0xC09
+  val Hpmcounter10  = 0xC0A
+  val Hpmcounter11  = 0xC0B
+  val Hpmcounter12  = 0xC0C
+  val Hpmcounter13  = 0xC0D
+  val Hpmcounter14  = 0xC0E
+  val Hpmcounter15  = 0xC0F
+  val Hpmcounter16  = 0xC10
+  val Hpmcounter17  = 0xC11
+  val Hpmcounter18  = 0xC12
+  val Hpmcounter19  = 0xC13
+  val Hpmcounter20  = 0xC14
+  val Hpmcounter21  = 0xC15
+  val Hpmcounter22  = 0xC16
+  val Hpmcounter23  = 0xC17
+  val Hpmcounter24  = 0xC18
+  val Hpmcounter25  = 0xC19
+  val Hpmcounter26  = 0xC1A
+  val Hpmcounter27  = 0xC1B
+  val Hpmcounter28  = 0xC1C
+  val Hpmcounter29  = 0xC1D
+  val Hpmcounter30  = 0xC1E
+  val Hpmcounter31  = 0xC1F
 
   // Supervisor Trap Setup
   val Sstatus       = 0x100
@@ -84,13 +101,10 @@ trait HasCSRConst {
   val Sfsbtail      = 0x9f3
 
   // uat support
-  val Ucid          = 0x080
-  val Ucsp          = 0x081
-
-  val Suatp         = 0x9f8
-  val Suatc         = 0x9f9
-  val Suatl         = 0x9fa
-  val Suath         = 0x9fb
+  val Uatp          = 0x080
+  val Uatc          = 0x081
+  val Ucid          = 0x082
+  val Ucsp          = 0x083
 
   // Machine Information Registers
   val Mvendorid     = 0xF11
@@ -202,7 +216,7 @@ trait HasCSRConst {
   // Debug Mode Registers
   val Dcsr          = 0x7B0
   val Dpc           = 0x7B1
-  val Dscratch      = 0x7B2
+  val Dscratch0     = 0x7B2
   val Dscratch1     = 0x7B3
 
   def privEcall  = 0x000.U
@@ -268,3 +282,4 @@ trait HasCSRConst {
     Mux(!mModeCanWrite && isTriggerReg, debug, true.B)
   }
 }
+object CSRConst extends HasCSRConst
