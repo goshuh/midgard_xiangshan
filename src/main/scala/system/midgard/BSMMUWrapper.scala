@@ -353,7 +353,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                          i.c.bits.source,
                                          true.B,
                                          i.c.bits.address(P.maBits := P.clWid),
-                                         0.U,
+                                         i.c.bits.address(P.maBits := P.clWid),
                                          i.c.bits.data,
                                          P.llcIdx) ::
                          backside.MemReq(P,
@@ -361,7 +361,7 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                          cha_pfd_req_raw ||
                                          cha_ppd_req_raw,
                                          i.a.bits.address(P.maBits := P.clWid),
-                                         0.U,
+                                         i.a.bits.address(P.maBits := P.clWid),
                                          i.a.bits.data,
                                          P.llcIdx)
 
