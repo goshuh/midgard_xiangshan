@@ -363,8 +363,8 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   io.in(0).ready := firstCanInsert
   io.in(1).ready := secondCanInsert && !sameWord && io.in(0).ready
 
-  val uat_mask = ~0.U((PAddrBits - 26).W) ## io.tlbcsr.uatc.tmask
-  val uat_base =  uat_mask & (io.tlbcsr.uatp.base << 6)
+  val uat_mask = ~io.tlbcsr.uatc.smask.pad(PAddrBits - 6)
+  val uat_base =  uat_mask & (io.tlbcsr.uatp.base(PAddrBits - 13, 0) << 6)
 
   def wordReqToBufLine( // allocate a new line in sbuffer
     req: DCacheWordReq,

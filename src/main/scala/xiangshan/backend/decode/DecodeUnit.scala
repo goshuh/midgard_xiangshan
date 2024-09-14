@@ -72,8 +72,9 @@ trait DecodeUnitConstants
  */
 object X64Decode extends DecodeConstants {
   // uat support
-  val UATT = BitPat("b100000000000?????000?????0001011")
-  val UATG = BitPat("b1000001??????????000?????0001011")
+  val UATG = BitPat("b10000000000000000000000000001011")
+  val UATT = BitPat("b100000100000?????000?????0001011")
+  val UATM = BitPat("b1000010??????????000?????0001011")
 
   val table: Array[(BitPat, List[BitPat])] = Array(
     LD      -> List(SrcType.reg, SrcType.imm, SrcType.X, FuType.ldu, LSUOpType.ld,  Y, N, N, N, N, N, SelImm.IMM_I),
@@ -99,9 +100,9 @@ object X64Decode extends DecodeConstants {
     RORIW   -> List(SrcType.reg, SrcType.imm, SrcType.X, FuType.alu, ALUOpType.rorw, Y, N, N, N, N, N, SelImm.IMM_I),
     ROLW    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.rolw, Y, N, N, N, N, N, SelImm.X),
 
-    // nop
-    UATT    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.uat,  Y, N, N, N, N, N, SelImm.X),
-    UATG    -> List(SrcType.imm, SrcType.imm, SrcType.X, FuType.alu, ALUOpType.add,  N, N, N, N, N, N, SelImm.X)
+    UATG    -> List(SrcType.imm, SrcType.imm, SrcType.X, FuType.alu, ALUOpType.add,  N, N, N, N, N, N, SelImm.X),
+    UATT    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.uatt, Y, N, N, N, N, N, SelImm.X),
+    UATM    -> List(SrcType.reg, SrcType.reg, SrcType.X, FuType.alu, ALUOpType.uatm, Y, N, N, N, N, N, SelImm.X)
   )
 }
 

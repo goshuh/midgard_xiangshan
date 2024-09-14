@@ -118,17 +118,20 @@ class MiscResultSelect(implicit p: Parameters) extends XSModule {
   val revRes = VecInit(Seq(io.revb, io.rev8, io.pack, io.orh48))(io.func(1, 0))
 
   // uat support
-  val uat_idx_s = BSR(io.src, io.uatc.idx)(32.W) & io.uatc.imask
-  val uat_vsc_s = BSR(io.src, io.uatc.vsc)( 5.W) & io.uatc.vmask
-  val uat_top_s = BSR(io.src, io.uatc.tvi)(32.W)
+  val vmask     = io.uatc.vmask
+  val tmask     = io.uatc.tmask
+  val smask     = io.uatc.smask
 
-  val uat_vmask = OrR(Dec(uat_vsc_s))
-  val uat_vsh_1 = ShR(uat_vmask, 1)
-  val uat_vsh_2 = ShR(uat_vmask, 2)
-  val uat_idx   = uat_idx_s & ~uat_vsh_1 | uat_vsh_2
+  val uat_idx_s = BSR(io.src & vmask, io.uatc.idx)
+  val uat_vsc_s = BSR(io.src & tmask, io.uatc.vsc)(5.W)
+  val uat_top_s = BSR(BSL(BSR(io.src, io.uatc.top), io.uatc.vsc), io.uatc.idx)
 
-  val uat_offs  = uat_top_s | (uat_idx ## Any(uat_vsc_s))
-  val uat_res   = Any(uat_offs & (~0.U(12.W) ## io.uatc.tmask)) ## 0.U(31.W) ## uat_offs
+  val uat_vmask = Ext(BFL(0.U(32.W), uat_vsc_s), 64)
+  val uat_vs1   = ShR(uat_vmask, 1)
+  val uat_vs2   = ShR(uat_vmask, 2)
+
+  val uat_idx   = ShR(uat_top_s | uat_idx_s & ~uat_vs1 | uat_vs2, 1) ## Any(uat_vsc_s)
+  val uat_res   = uat_idx | (Any(uat_idx & ~Ext(smask, 64)) ## 0.U(63.W))
 
   val customRes = VecInit(Seq(
     Cat(0.U(31.W), io.src(31, 0), 0.U(1.W)),

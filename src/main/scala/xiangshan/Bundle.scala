@@ -448,29 +448,11 @@ class TlbUatpBundle extends Bundle {
 }
 
 class TlbUatcBundle extends frontside.VSCCfg {
-  def mask(v: UInt): UInt = {
-    Or.rightOR(UIntToOH(v)) >> 1
-  }
-
   def apply(data: UInt, new_data: UInt, wr: Bool): Unit = {
     idx  := data( 5,  0)
     vsc  := data(13,  8)
     top  := data(21, 16)
     siz  := data(29, 24)
-
-    val new_idx = new_data( 5,  0)
-    val new_vsc = new_data(13,  8)
-    val new_top = new_data(21, 16)
-    val new_siz = new_data(29, 24)
-
-    // just let the synthesizer do the optimization
-    val new_tvi = new_top + new_idx + ~new_vsc
-
-    tvi   := RegEnable( new_tvi,                  wr)
-    mmask := RegEnable( mask(new_idx),            wr)
-    imask := RegEnable( mask(new_vsc) >> new_idx, wr)
-    vmask := RegEnable( mask(new_top) >> new_vsc, wr)
-    tmask := RegEnable(~mask(new_siz),            wr)
   }
 }
 

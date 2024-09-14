@@ -679,8 +679,8 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   missQueue.io.main_pipe_resp := RegNext(mainPipe.io.atomic_resp)
 
   // uat support
-  val uat_mask = ~0.U((PAddrBits - 26).W) ## io.tlb.uatc.tmask
-  val uat_base =  uat_mask & (io.tlb.uatp.base << 6)
+  val uat_mask = ~io.tlb.uatc.smask.pad(PAddrBits - 6)
+  val uat_base =  uat_mask & (io.tlb.uatp.base(PAddrBits - 13, 0) << 6)
 
   bus.a.bits.user.lift(UATKey).foreach(_ :=
     io.tlb.uatp.en && ((uat_mask & (bus.a.bits.address >> 6)) === uat_base))
