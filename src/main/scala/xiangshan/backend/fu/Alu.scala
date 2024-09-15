@@ -127,10 +127,8 @@ class MiscResultSelect(implicit p: Parameters) extends XSModule {
   val uat_top_s = BSR(BSL(BSR(io.src, io.uatc.top), io.uatc.vsc), io.uatc.idx)
 
   val uat_vmask = Ext(BFL(0.U(32.W), uat_vsc_s), 64)
-  val uat_vs1   = ShR(uat_vmask, 1)
-  val uat_vs2   = ShR(uat_vmask, 2)
 
-  val uat_idx   = ShR(uat_top_s | uat_idx_s & ~uat_vs1 | uat_vs2, 1) ## Any(uat_vsc_s)
+  val uat_idx   = ShL(uat_top_s | uat_idx_s & ~uat_vmask | ShR(uat_vmask, 1), 1) | Any(uat_vsc_s)
   val uat_res   = uat_idx | (Any(uat_idx & ~Ext(smask, 64)) ## 0.U(63.W))
 
   val customRes = VecInit(Seq(
