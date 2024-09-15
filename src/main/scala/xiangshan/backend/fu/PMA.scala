@@ -189,6 +189,12 @@ trait PMAMethod extends PMAConst {
       mask_list.append(genMask(addr, a))
     }
 
+    val max = 1L << (PMPAddrBits - 2)
+
+    cfg_list.append(PMPConfigUInt(false, true, true, 1, true, true, true))
+    addr_list.append(genAddr(max - 1L))
+    mask_list.append(genMask(max, 1))
+
     addPMA(0x80000000L, a = 1, w = true, r = true)
     addPMA(0x3c000000L, a = 1)
     addPMA(0x39002000L, a = 1, w = true, r = true)
