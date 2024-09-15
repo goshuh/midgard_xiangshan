@@ -76,8 +76,7 @@ case class ExuConfig
   val hasLoadError = fuConfigs.map(_.hasLoadError).reduce(_ || _)
   val flushPipe: Boolean = fuConfigs.map(_.flushPipe).reduce(_ ||_)
   val replayInst: Boolean = fuConfigs.map(_.replayInst).reduce(_ || _)
-  val trigger: Boolean = fuConfigs.map(_.trigger).reduce(_ || _)
-  val needExceptionGen: Boolean = exceptionOut.nonEmpty || flushPipe || replayInst || trigger
+  val needExceptionGen: Boolean = exceptionOut.nonEmpty || flushPipe || replayInst
 
   val latency: HasFuLatency = {
     val lats = fuConfigs.map(_.latency)

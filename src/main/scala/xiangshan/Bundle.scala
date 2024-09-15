@@ -116,7 +116,6 @@ class CtrlFlow(implicit p: Parameters) extends XSBundle {
   val foldpc = UInt(MemPredPCWidth.W)
   val priv = Bool()
   val exceptionVec = ExceptionVec()
-  val trigger = new TriggerCf
   val pd = new PreDecodeInfo
   val pred_taken = Bool()
   val crossPageIPFFix = Bool()
@@ -200,19 +199,6 @@ class CfCtrl(implicit p: Parameters) extends XSBundle {
   val ctrl = new CtrlSignals
 }
 
-class PerfDebugInfo(implicit p: Parameters) extends XSBundle {
-  val eliminatedMove = Bool()
-  // val fetchTime = UInt(64.W)
-  val renameTime = UInt(XLEN.W)
-  val dispatchTime = UInt(XLEN.W)
-  val enqRsTime = UInt(XLEN.W)
-  val selectTime = UInt(XLEN.W)
-  val issueTime = UInt(XLEN.W)
-  val writebackTime = UInt(XLEN.W)
-  // val commitTime = UInt(64.W)
-  val runahead_checkpoint_id = UInt(64.W)
-}
-
 // Separate LSQ
 class LSIdx(implicit p: Parameters) extends XSBundle {
   val lqIdx = new LqPtr
@@ -229,7 +215,6 @@ class MicroOp(implicit p: Parameters) extends CfCtrl {
   val lqIdx = new LqPtr
   val sqIdx = new SqPtr
   val eliminatedMove = Bool()
-  val debugInfo = new PerfDebugInfo
   def needRfRPort(index: Int, isFp: Boolean, ignoreState: Boolean = true) : Bool = {
     val stateReady = srcState(index) === SrcState.rdy || ignoreState.B
     val readReg = if (isFp) {
@@ -248,7 +233,6 @@ class MicroOp(implicit p: Parameters) extends CfCtrl {
     replayInst: Boolean = false
   ): MicroOp = {
     cf.exceptionVec.zipWithIndex.filterNot(x => exceptionBits.contains(x._2)).foreach(_._1 := false.B)
-    cf.trigger.backendHit.foreach(_ := false.B)
     if (!flushPipe) { ctrl.flushPipe := false.B }
     if (!replayInst) { ctrl.replayInst := false.B }
     this
@@ -573,8 +557,6 @@ class CustomCSRCtrlIO(implicit p: Parameters) extends XSBundle {
   val distribute_csr = new DistributedCSRIO()
   // TODO: move it to a new bundle, since single step is not a custom control signal
   val singlestep = Output(Bool())
-  val frontend_trigger = new FrontendTdataDistributeIO()
-  val mem_trigger = new MemTdataDistributeIO()
 }
 
 class DistributedCSRIO(implicit p: Parameters) extends XSBundle {
@@ -636,88 +618,4 @@ class L1CacheErrorInfo(implicit p: Parameters) extends XSBundle {
     beu_info.ecc_error.bits := paddr
     beu_info
   }
-}
-
-/* TODO how to trigger on next inst?
-1. If hit is determined at frontend, then set a "next instr" trap at dispatch like singlestep
-2. If it is determined at Load(meaning it must be "hit after", then it must not be a jump. So we can let it commit and set
-xret csr to pc + 4/ + 2
-2.5 The problem is to let it commit. This is the real TODO
-3. If it is load and hit before just treat it as regular load exception
- */
-
-// This bundle carries trigger hit info along the pipeline
-// Now there are 10 triggers divided into 5 groups of 2
-// These groups are
-// (if if) (store store) (load loid) (if store) (if load)
-
-// Triggers in the same group can chain, meaning that they only
-// fire is both triggers in the group matches (the triggerHitVec bit is asserted)
-// Chaining of trigger No. (2i) and (2i+1) is indicated by triggerChainVec(i)
-// Timing of 0 means trap at current inst, 1 means trap at next inst
-// Chaining and timing and the validness of a trigger is controlled by csr
-// In two chained triggers, if they have different timing, both won't fire
-//class TriggerCf (implicit p: Parameters) extends XSBundle {
-//  val triggerHitVec = Vec(10, Bool())
-//  val triggerTiming = Vec(10, Bool())
-//  val triggerChainVec = Vec(5, Bool())
-//}
-
-class TriggerCf(implicit p: Parameters) extends XSBundle {
-  // frontend
-  val frontendHit       = Vec(TriggerNum, Bool()) // en && hit
-  val frontendTiming    = Vec(TriggerNum, Bool()) // en && timing
-  val frontendChain     = Vec(TriggerNum, Bool()) // en && chain
-  val frontendCanFire   = Vec(TriggerNum, Bool())
-  // backend
-  val backendHit        = Vec(TriggerNum, Bool())
-  val backendCanFire    = Vec(TriggerNum, Bool())
-
-  // Two situations not allowed:
-  // 1. load data comparison
-  // 2. store chaining with store
-  // def getHitFrontend = frontendHit.reduce(_ || _)
-  // def getHitBackend = backendHit.reduce(_ || _)
-  // def hit = getHitFrontend || getHitBackend
-  def getFrontendCanFire = frontendCanFire.reduce(_ || _)
-  def getBackendCanFire = backendCanFire.reduce(_ || _)
-  def canFire = getFrontendCanFire || getBackendCanFire
-  def clear(): Unit = {
-    frontendHit.foreach(_ := false.B)
-    frontendCanFire.foreach(_ := false.B)
-    backendHit.foreach(_ := false.B)
-    backendCanFire.foreach(_ := false.B)
-    frontendTiming.foreach(_ := false.B)
-    frontendChain.foreach(_ := false.B)
-  }
-}
-
-// these 3 bundles help distribute trigger control signals from CSR
-// to Frontend, Load and Store.
-class FrontendTdataDistributeIO(implicit p: Parameters) extends XSBundle {
-  val tUpdate = ValidIO(new Bundle {
-    val addr = Output(UInt(log2Up(TriggerNum).W))
-    val tdata = new MatchTriggerIO
-  })
-  val tEnableVec: Vec[Bool] = Output(Vec(TriggerNum, Bool()))
-}
-
-class MemTdataDistributeIO(implicit p: Parameters) extends XSBundle {
-  val tUpdate = ValidIO(new Bundle {
-    val addr = Output(UInt(log2Up(TriggerNum).W))
-    val tdata = new MatchTriggerIO
-  })
-  val tEnableVec: Vec[Bool] = Output(Vec(TriggerNum, Bool()))
-}
-
-class MatchTriggerIO(implicit p: Parameters) extends XSBundle {
-  val matchType = Output(UInt(2.W))
-  val select = Output(Bool())
-  val timing = Output(Bool())
-  val action = Output(Bool())
-  val chain = Output(Bool())
-  val execute = Output(Bool())
-  val store = Output(Bool())
-  val load = Output(Bool())
-  val tdata2 = Output(UInt(64.W))
 }

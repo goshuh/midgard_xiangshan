@@ -125,14 +125,14 @@ class XSTile()(implicit p: Parameters) extends LazyModule
     (buffers, node)
   }
 
-  val (l1i_to_l2_buffers, l1i_to_l2_buf_node) = chainBuffer(3, "l1i_to_l2_buffer")
+  val (l1i_to_l2_buffers, l1i_to_l2_buf_node) = chainBuffer(1, "l1i_to_l2_buffer")
   misc.busPMU :=
     TLLogger(s"L2_L1I_${coreParams.HartId}", debugOpts.EnableTLLogger) :=
     l1i_to_l2_buf_node :=
     core.frontend.icache.clientNode
 
   val ptw_to_l2_buffers = if (!coreParams.softPTW) {
-    val (buffers, buf_node) = chainBuffer(5, "ptw_to_l2_buffer")
+    val (buffers, buf_node) = chainBuffer(1, "ptw_to_l2_buffer")
     misc.busPMU :=
       TLLogger(s"L2_PTW_${coreParams.HartId}", debugOpts.EnableTLLogger) :=
       buf_node :=

@@ -113,7 +113,7 @@ class CSRFileIO(implicit p: Parameters) extends XSBundle {
 }
 
 class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMPMethod with PMAMethod with HasTriggerConst
-  with SdtrigExt with DebugCSR
+  with DebugCSR
 {
   val csrio = IO(new CSRFileIO)
 
@@ -199,44 +199,6 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   }
   // csrio.singleStep := dcsrData.step
   csrio.customCtrl.singlestep := dcsrData.step && !debugMode
-
-  // Trigger CSRs
-  private val tselectPhy = RegInit(0.U(4.W))
-
-  private val tdata1RegVec = RegInit(VecInit(Seq.fill(TriggerNum)(Tdata1Bundle.default)))
-  private val tdata2RegVec = RegInit(VecInit(Seq.fill(TriggerNum)(0.U(64.W))))
-  private val tdata1WireVec = tdata1RegVec.map(_.asTypeOf(new Tdata1Bundle))
-  private val tdata2WireVec = tdata2RegVec
-  private val tdata1Selected = tdata1RegVec(tselectPhy).asTypeOf(new Tdata1Bundle)
-  private val tdata2Selected = tdata2RegVec(tselectPhy)
-  private val newTriggerChainVec = UIntToOH(tselectPhy, TriggerNum).asBools | tdata1WireVec.map(_.data.asTypeOf(new MControlData).chain)
-  private val newTriggerChainIsLegal = TriggerCheckChainLegal(newTriggerChainVec, TriggerChainMaxLength)
-  val tinfo = RegInit((BigInt(1) << TrigTypeEnum.MCONTROL.litValue.toInt).U(XLEN.W)) // This value should be 4.U
-
-
-  def WriteTselect(wdata: UInt) = {
-    Mux(wdata < TriggerNum.U, wdata(3, 0), tselectPhy)
-  }
-
-  def GenTdataDistribute(tdata1: Tdata1Bundle, tdata2: UInt): MatchTriggerIO = {
-    val res = Wire(new MatchTriggerIO)
-    val mcontrol: MControlData = WireInit(tdata1.data.asTypeOf(new MControlData))
-    res.matchType := mcontrol.match_.asUInt
-    res.select    := mcontrol.select
-    res.timing    := mcontrol.timing
-    res.action    := mcontrol.action.asUInt
-    res.chain     := mcontrol.chain
-    res.execute   := mcontrol.execute
-    res.load      := mcontrol.load
-    res.store     := mcontrol.store
-    res.tdata2    := tdata2
-    res
-  }
-
-  csrio.customCtrl.frontend_trigger.tUpdate.bits.addr := tselectPhy
-  csrio.customCtrl.mem_trigger.tUpdate.bits.addr := tselectPhy
-  csrio.customCtrl.frontend_trigger.tUpdate.bits.tdata := GenTdataDistribute(tdata1Selected, tdata2Selected)
-  csrio.customCtrl.mem_trigger.tUpdate.bits.tdata := GenTdataDistribute(tdata1Selected, tdata2Selected)
 
   // Machine-Level CSRs
   // mtvec: {BASE (WARL), MODE (WARL)} where mode is 0 or 1
@@ -636,17 +598,6 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     MaskedRegMap(Mtval, mtval),
     MaskedRegMap(Mip, mip.asUInt, 0.U(XLEN.W), MaskedRegMap.Unwritable),
 
-    //--- Trigger ---
-    MaskedRegMap(Tselect, tselectPhy, WritableMask, WriteTselect),
-    // Todo: support chain length = 2
-    MaskedRegMap(Tdata1, tdata1RegVec(tselectPhy),
-      WritableMask,
-      x => Tdata1Bundle.Write(x, tdata1RegVec(tselectPhy), newTriggerChainIsLegal, debug_mode = debugMode),
-      WritableMask,
-      x => Tdata1Bundle.Read(x)),
-    MaskedRegMap(Tdata2, tdata2RegVec(tselectPhy)),
-    MaskedRegMap(Tinfo, tinfo, 0.U(XLEN.W), MaskedRegMap.Unwritable),
-
     //--- Debug Mode ---
     MaskedRegMap(Dcsr, dcsr, dcsrMask, dcsrUpdateSideEffect),
     MaskedRegMap(Dpc, dpc),
@@ -770,41 +721,6 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   }
   csrio.fpu.frm := fcsr.asTypeOf(new FcsrStruct).frm
 
-
-  // Trigger Ctrl
-  val triggerEnableVec = tdata1RegVec.map { tdata1 =>
-    val mcontrolData = tdata1.asTypeOf(new Tdata1Bundle).data.asTypeOf(new MControlData)
-    tdata1.asTypeOf(new Tdata1Bundle).type_.asUInt === TrigTypeEnum.MCONTROL && (
-      mcontrolData.m && priviledgeMode === ModeM ||
-        mcontrolData.s && priviledgeMode === ModeS ||
-        mcontrolData.u && priviledgeMode === ModeU)
-  }
-  val fetchTriggerEnableVec = triggerEnableVec.zip(tdata1WireVec).map {
-    case (tEnable, tdata1) => tEnable && tdata1.asTypeOf(new Tdata1Bundle).data.asTypeOf(new MControlData).isFetchTrigger
-  }
-  val memAccTriggerEnableVec = triggerEnableVec.zip(tdata1WireVec).map {
-    case (tEnable, tdata1) => tEnable && tdata1.asTypeOf(new Tdata1Bundle).data.asTypeOf(new MControlData).isMemAccTrigger
-  }
-  csrio.customCtrl.frontend_trigger.tEnableVec := fetchTriggerEnableVec
-  csrio.customCtrl.mem_trigger.tEnableVec := memAccTriggerEnableVec
-
-  val tdata1Update = wen && (addr === Tdata1.U)
-  val tdata2Update = wen && (addr === Tdata2.U)
-  val triggerUpdate = wen && (addr === Tdata1.U || addr === Tdata2.U)
-  val frontendTriggerUpdate =
-    tdata1Update && wdata.asTypeOf(new Tdata1Bundle).type_.asUInt === TrigTypeEnum.MCONTROL &&
-      wdata.asTypeOf(new Tdata1Bundle).data.asTypeOf(new MControlData).isFetchTrigger ||
-      tdata1Selected.data.asTypeOf(new MControlData).isFetchTrigger && triggerUpdate
-  val memTriggerUpdate =
-    tdata1Update && wdata.asTypeOf(new Tdata1Bundle).type_.asUInt === TrigTypeEnum.MCONTROL &&
-      wdata.asTypeOf(new Tdata1Bundle).data.asTypeOf(new MControlData).isMemAccTrigger ||
-      tdata1Selected.data.asTypeOf(new MControlData).isMemAccTrigger && triggerUpdate
-
-  csrio.customCtrl.frontend_trigger.tUpdate.valid := RegNext(RegNext(frontendTriggerUpdate))
-  csrio.customCtrl.mem_trigger.tUpdate.valid := RegNext(RegNext(memTriggerUpdate))
-  XSDebug(triggerEnableVec.reduce(_ || _), p"Debug Mode: At least 1 trigger is enabled," +
-    p"trigger enable is ${Binary(triggerEnableVec.asUInt)}\n")
-
   // CSR inst decode
   val isEbreak = addr === privEbreak && func === CSROpType.jmp
   val isEcall  = addr === privEcall  && func === CSROpType.jmp
@@ -851,7 +767,7 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val resetUatc = addr === Uatc.U && wen
   val resetUcid = addr === Ucid.U && wen
 
-  flushPipe := resetSatp || resetUatp || resetUatc || resetUcid || frm_change || isXRet || frontendTriggerUpdate
+  flushPipe := resetSatp || resetUatp || resetUatc || resetUcid || frm_change || isXRet
 
   tlbBundle.satp.apply(satp)
   tlbBundle.uatp.apply(uatp)
@@ -1015,30 +931,18 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   val hasDelayedStoreFault  = hasException && exceptionVecFromRob(delayedStoreFault) || ise_expt
   val hasBreakPoint         = hasException && exceptionVecFromRob(breakPoint)
   val hasSingleStep         = hasException && csrio.exception.bits.uop.ctrl.singleStep
-  val hasTriggerFire        = hasException && csrio.exception.bits.uop.cf.trigger.canFire
-  val triggerFrontendHitVec = csrio.exception.bits.uop.cf.trigger.frontendHit
-  val triggerMemHitVec      = csrio.exception.bits.uop.cf.trigger.backendHit
-  val triggerHitVec         = triggerFrontendHitVec | triggerMemHitVec // Todo: update mcontrol.hit
-  val triggerCanFireVec     = csrio.exception.bits.uop.cf.trigger.frontendCanFire | csrio.exception.bits.uop.cf.trigger.backendCanFire
-  // More than one triggers can hit at the same time, but only fire one
-  // We select the first hit trigger to fire
-  val triggerFireOH = PriorityEncoderOH(triggerCanFireVec)
-  val triggerFireAction = PriorityMux(triggerFireOH, tdata1WireVec.map(_.getTriggerAction)).asUInt
 
   XSDebug(hasSingleStep, "Debug Mode: single step exception\n")
-  XSDebug(hasTriggerFire, p"Debug Mode: trigger fire, frontend hit vec ${Binary(csrio.exception.bits.uop.cf.trigger.frontendHit.asUInt)} " +
-    p"backend hit vec ${Binary(csrio.exception.bits.uop.cf.trigger.backendHit.asUInt)}\n")
 
   val hasExceptionVec = Mux(ise_expt, VecInit(GenMask(delayedStoreFault).asBools), csrio.exception.bits.uop.cf.exceptionVec)
   val regularExceptionNO = ExceptionNO.priorities.foldRight(0.U)((i: Int, sum: UInt) => Mux(hasExceptionVec(i), i.U, sum))
-  val exceptionNO = Mux(hasSingleStep || hasTriggerFire, 3.U, regularExceptionNO)
+  val exceptionNO = Mux(hasSingleStep, 3.U, regularExceptionNO)
   val causeNO = (hasIntr << (XLEN-1)).asUInt | Mux(hasIntr, intrNOReg, exceptionNO)
 
   val hasExceptionIntr = csrio.exception.valid
 
   val hasDebugEbreakException = hasBreakPoint && ebreakEnterDebugMode
-  val hasDebugTriggerException = hasTriggerFire && triggerFireAction === TrigActionEnum.DEBUG_MODE
-  val hasDebugException = hasDebugEbreakException || hasDebugTriggerException || hasSingleStep
+  val hasDebugException = hasDebugEbreakException || hasSingleStep
   val hasDebugTrap = hasDebugException || hasDebugIntr
   val ebreakEnterParkLoop = debugMode && hasExceptionIntr
 
@@ -1197,7 +1101,6 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
       }.otherwise { // hasDebugException
         dpc := iexceptionPC // TODO: check it when hasSingleStep
         dcsrNew.cause := MuxCase(0.U, Seq(
-          hasTriggerFire -> CAUSE_TRIGGER,
           hasBreakPoint -> CAUSE_HALTREQ,
           hasSingleStep -> CAUSE_STEP
         ))

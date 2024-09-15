@@ -110,7 +110,6 @@ class Dispatch(implicit p: Parameters) extends XSModule with HasPerfEvents {
     updatedCommitType(i) := Cat(isLs(i), (isStore(i) && !isAMO(i)) | isBranch(i))
 
     updatedUop(i) := io.fromRename(i).bits
-    updatedUop(i).debugInfo.eliminatedMove := io.fromRename(i).bits.eliminatedMove
     // update commitType
     when (!CommitType.isFused(io.fromRename(i).bits.ctrl.commitType)) {
       updatedUop(i).ctrl.commitType := updatedCommitType(i)
@@ -138,7 +137,6 @@ class Dispatch(implicit p: Parameters) extends XSModule with HasPerfEvents {
     // update singleStep
     updatedUop(i).ctrl.singleStep := io.singleStep && (if (i == 0) singleStepStatus else true.B)
     when (io.fromRename(i).fire()) {
-      XSDebug(updatedUop(i).cf.trigger.getFrontendCanFire, s"Debug Mode: inst ${i} has frontend trigger exception\n")
       XSDebug(updatedUop(i).ctrl.singleStep, s"Debug Mode: inst ${i} has single step exception\n")
     }
   }
@@ -170,7 +168,7 @@ class Dispatch(implicit p: Parameters) extends XSModule with HasPerfEvents {
   // notBlockedByPrevious: previous instructions can enqueue
   val hasException = VecInit(io.fromRename.zip(updatedUop).map {
     case (fromRename: DecoupledIO[MicroOp], uop: MicroOp) =>
-      selectFrontend(fromRename.bits.cf.exceptionVec).asUInt.orR || uop.ctrl.singleStep || fromRename.bits.cf.trigger.getFrontendCanFire
+      selectFrontend(fromRename.bits.cf.exceptionVec).asUInt.orR || uop.ctrl.singleStep
   })
   val thisIsBlocked = VecInit((0 until RenameWidth).map(i => {
     // for i > 0, when Rob is empty but dispatch1 have valid instructions to enqueue, it's blocked

@@ -238,7 +238,6 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
       for ((wb_next, wb) <- exuOutput.zip(writeback)) {
         wb_next.valid := RegNext(wb.valid && !wb.bits.uop.robIdx.needFlush(Seq(stage2Redirect, redirectForExu)))
         wb_next.bits := RegNext(wb.bits)
-        wb_next.bits.uop.debugInfo.writebackTime := timer
       }
       exuOutput
     }))

@@ -47,7 +47,6 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
   val ipf = Bool()
   val acf = Bool()
   val crossPageIPFFix = Bool()
-  val triggered = new TriggerCf
 
   def fromFetch(fetch: FetchToIBuffer, i: Int): IBufEntry = {
     inst   := fetch.instrs(i)
@@ -61,7 +60,6 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
     ipf := fetch.ipf(i)
     acf := fetch.acf(i)
     crossPageIPFFix := fetch.crossPageIPFFix(i)
-    triggered := fetch.triggered(i)
     this
   }
 
@@ -74,7 +72,6 @@ class IBufEntry(implicit p: Parameters) extends XSBundle {
     cf.exceptionVec := 0.U.asTypeOf(ExceptionVec())
     cf.exceptionVec(instrPageFault) := ipf
     cf.exceptionVec(instrAccessFault) := acf
-    cf.trigger := triggered
     cf.pd := pd
     cf.pred_taken := pred_taken
     cf.crossPageIPFFix := crossPageIPFFix

@@ -63,7 +63,6 @@ class NewIFUIO(implicit p: Parameters) extends XSBundle {
   val icachePerfInfo  = Input(new ICachePerfInfo)
   val toIbuffer       = Decoupled(new FetchToIBuffer)
   val uncacheInter   =  new UncacheInterface
-  val frontendTrigger = Flipped(new FrontendTdataDistributeIO)
   val rob_commits = Flipped(Vec(CommitWidth, Valid(new RobCommitInfo)))
   val iTLBInter       = new BlockTlbRequestIO
   val pmp             =   new ICachePMPBundle
@@ -80,7 +79,6 @@ class LastHalfInfo(implicit p: Parameters) extends XSBundle {
 
 class IfuToPreDecode(implicit p: Parameters) extends XSBundle {
   val data                =  if(HasCExtension) Vec(PredictWidth + 1, UInt(16.W)) else Vec(PredictWidth, UInt(32.W))
-  val frontendTrigger     = new FrontendTdataDistributeIO
   val pc                  = Vec(PredictWidth, UInt(VAddrBits.W))
 }
 
@@ -120,7 +118,6 @@ class NewIFU(implicit p: Parameters) extends XSModule
   val preDecoders       = Seq.fill(4){ Module(new PreDecode) }
 
   val predChecker     = Module(new PredChecker)
-  val frontendTrigger = Module(new FrontendTrigger)
   val (checkerIn, checkerOutStage1, checkerOutStage2)         = (predChecker.io.in, predChecker.io.out.stage1Out,predChecker.io.out.stage2Out)
 
   io.iTLBInter.resp.ready := true.B
@@ -312,7 +309,6 @@ class NewIFU(implicit p: Parameters) extends XSModule
   for(i <- 0 until 4){
     val preDecoderIn  = preDecoders(i).io.in
     preDecoderIn.data := f2_cut_data(i)
-    preDecoderIn.frontendTrigger := io.frontendTrigger  
     preDecoderIn.pc  := f2_pc
   }
 
@@ -580,15 +576,6 @@ class NewIFU(implicit p: Parameters) extends XSModule
 
   f3_instr_valid := Mux(f3_lastHalf.valid,f3_hasHalfValid ,VecInit(f3_pd.map(inst => inst.valid)))
 
-  /*** frontend Trigger  ***/
-  frontendTrigger.io.pds  := f3_pd
-  frontendTrigger.io.pc   := f3_pc
-  frontendTrigger.io.data   := f3_cut_data
-
-  frontendTrigger.io.frontendTrigger  := io.frontendTrigger
-
-  val f3_triggered = frontendTrigger.io.triggered
-
   /*** send to Ibuffer  ***/
 
   io.toIbuffer.valid            := f3_valid && (!f3_req_is_mmio || f3_mmio_can_go) && !f3_flush
@@ -604,7 +591,6 @@ class NewIFU(implicit p: Parameters) extends XSModule
   io.toIbuffer.bits.ipf         := VecInit(f3_pf_vec.zip(f3_crossPageFault).map{case (pf, crossPF) => pf || crossPF})
   io.toIbuffer.bits.acf         := f3_af_vec
   io.toIbuffer.bits.crossPageIPFFix := f3_crossPageFault
-  io.toIbuffer.bits.triggered   := f3_triggered
 
   when(f3_lastHalf.valid){
     io.toIbuffer.bits.enqEnable := checkerOutStage1.fixedRange.asUInt & f3_instr_valid.asUInt & f3_lastHalf_mask

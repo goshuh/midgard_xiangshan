@@ -406,7 +406,6 @@ class ReservationStation(params: RSParams)(implicit p: Parameters) extends XSMod
     uop.valid := s0_valid
     when (s0_valid) {
       uop.bits := in.bits
-      uop.bits.debugInfo.enqRsTime := GTimer()
       // a temp fix for blocked. This will release the load wait for some instructions earlier.
       // copied from status array
       if (params.checkWaitBit) {
@@ -515,7 +514,6 @@ class ReservationStation(params: RSParams)(implicit p: Parameters) extends XSMod
 
     XSPerfAccumulate(s"deq_oldest_override_select_$i", s1_issue_oldest(i) && s1_in_selectPtrValid(i) && s1_out(i).ready)
   }
-  s1_out.foreach(_.bits.uop.debugInfo.selectTime := GTimer())
 
   for (i <- 0 until params.numDeq) {
     s1_out(i).valid := s1_issuePtrOH(i).valid && !s1_out(i).bits.uop.robIdx.needFlush(io.redirect)
@@ -555,7 +553,6 @@ class ReservationStation(params: RSParams)(implicit p: Parameters) extends XSMod
       // TODO: optimize timing here since ready may be slow
       wakeupQueue.io.in.valid := s1_issuePtrOH(i).valid && s1_out(i).ready && fuCheck
       wakeupQueue.io.in.bits := s1_out(i).bits.uop
-      wakeupQueue.io.in.bits.debugInfo.issueTime := GTimer() + 1.U
       wakeupQueue.io.redirect := io.redirect
       io.fastWakeup.get(i) := wakeupQueue.io.out
       XSPerfAccumulate(s"fast_blocked_$i", s1_issuePtrOH(i).valid && fuCheck && !s1_out(i).ready)
@@ -601,7 +598,6 @@ class ReservationStation(params: RSParams)(implicit p: Parameters) extends XSMod
       io.fastWakeup.get(i).valid := s1_issue_oldest_dup(i) || select_ptr_dup(i).valid || canBypass
       io.fastWakeup.get(i).bits := Mux(s1_issue_oldest_dup(i), oldest_uop_dup,
         Mux(select_ptr_dup(i).valid, select_uop_dup(i), uop.bits))
-      io.fastWakeup.get(i).bits.debugInfo.issueTime := GTimer() + 1.U
     }
   }
 
@@ -772,7 +768,6 @@ class ReservationStation(params: RSParams)(implicit p: Parameters) extends XSMod
     s2_deq(i).ready := !s2_deq(i).valid || io.deq(i).ready
     io.deq(i).valid := s2_deq(i).valid
     io.deq(i).bits := s2_deq(i).bits
-    io.deq(i).bits.uop.debugInfo.issueTime := GTimer()
 
     // data: send to bypass network
     // TODO: these should be done outside RS

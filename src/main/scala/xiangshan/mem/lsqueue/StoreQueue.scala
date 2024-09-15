@@ -273,7 +273,6 @@ class StoreQueue(implicit p: Parameters) extends XSModule
       // mmio(stWbIndex) := io.storeIn(i).bits.mmio
 
       uop(stWbIndex).ctrl := io.storeIn(i).bits.uop.ctrl
-      uop(stWbIndex).debugInfo := io.storeIn(i).bits.uop.debugInfo
       XSInfo("store addr write to sq idx %d pc 0x%x miss:%d vaddr %x paddr %x mmio %x\n",
         io.storeIn(i).bits.uop.sqIdx.value,
         io.storeIn(i).bits.uop.cf.pc,

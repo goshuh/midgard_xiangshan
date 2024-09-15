@@ -23,7 +23,6 @@ import utils._
 import xiangshan.ExceptionNO._
 import xiangshan._
 import xiangshan.backend.fu.PMPRespBundle
-import xiangshan.backend.fu.util.SdtrigExt
 import xiangshan.cache._
 import xiangshan.cache.mmu.{TlbCmd, TlbReq, TlbRequestIO, TlbResp}
 
@@ -38,21 +37,12 @@ class LoadToLsqIO(implicit p: Parameters) extends XSBundle {
   val s3_replay_from_fetch = Output(Bool()) // update uop.ctrl.replayInst in load queue in s3
   val forward = new PipeLoadForwardQueryIO
   val loadViolationQuery = new LoadViolationQueryIO
-  val trigger = Flipped(new LqTriggerIO)
 }
 
 class LoadToLoadIO(implicit p: Parameters) extends XSBundle {
   // load to load fast path is limited to ld (64 bit) used as vaddr src1 only
   val data = UInt(XLEN.W)
   val valid = Bool()
-}
-
-class LoadUnitTriggerIO(implicit p: Parameters) extends XSBundle {
-  val tdata2 = Input(UInt(64.W))
-  val matchType = Input(UInt(2.W))
-  val tEnable = Input(Bool()) // timing is calculated before this
-  val addrHit = Output(Bool())
-  val lastDataHit = Output(Bool())
 }
 
 // Load Pipeline Stage 0
@@ -495,7 +485,7 @@ class LoadUnit_S2(implicit p: Parameters) extends XSModule with HasLoadHelper {
   XSPerfAccumulate("replay_from_fetch_load_vio", io.out.valid && debug_ldldVioReplay)
 }
 
-class LoadUnit(implicit p: Parameters) extends XSModule with HasLoadHelper with HasPerfEvents with SdtrigExt {
+class LoadUnit(implicit p: Parameters) extends XSModule with HasLoadHelper with HasPerfEvents {
   val io = IO(new Bundle() {
     val ldin = Flipped(Decoupled(new ExuInput))
     val ldout = Decoupled(new ExuOutput)
@@ -508,7 +498,6 @@ class LoadUnit(implicit p: Parameters) extends XSModule with HasLoadHelper with 
     val sbuffer = new LoadForwardQueryIO
     val lsq = new LoadToLsqIO
     val fastUop = ValidIO(new MicroOp) // early wakeup signal generated in load_s1, send to RS in load_s2
-    val trigger = Vec(TriggerNum, new LoadUnitTriggerIO)
 
     val tlb = new TlbRequestIO()
     val pmp = Flipped(new PMPRespBundle()) // arrive same to tlb now
@@ -803,20 +792,6 @@ class LoadUnit(implicit p: Parameters) extends XSModule with HasLoadHelper with 
     assert(RegNext(!hitLoadOut.valid))
     assert(RegNext(!io.lsq.loadIn.valid) || RegNext(load_s2.io.s2_dcache_require_replay))
   }
-
-  val lastValidData = RegEnable(io.ldout.bits.data, io.ldout.fire)
-  val hitLoadAddrTriggerHitVec = Wire(Vec(TriggerNum, Bool()))
-  val lqLoadAddrTriggerHitVec = io.lsq.trigger.lqLoadAddrTriggerHitVec
-  (0 until TriggerNum).map{i => {
-    val tdata2 = io.trigger(i).tdata2
-    val matchType = io.trigger(i).matchType
-    val tEnable = io.trigger(i).tEnable
-
-    hitLoadAddrTriggerHitVec(i) := TriggerCmp(load_s2.io.out.bits.vaddr, tdata2, matchType, tEnable)
-    io.trigger(i).addrHit := RegNext(Mux(hitLoadOut.valid, hitLoadAddrTriggerHitVec(i), lqLoadAddrTriggerHitVec(i)))
-    io.trigger(i).lastDataHit := TriggerCmp(lastValidData, tdata2, matchType, tEnable)
-  }}
-  io.lsq.trigger.hitLoadAddrTriggerHitVec := hitLoadAddrTriggerHitVec
 
   val perfEvents = Seq(
     ("load_s0_in_fire         ", load_s0.io.in.fire                                                                                                              ),

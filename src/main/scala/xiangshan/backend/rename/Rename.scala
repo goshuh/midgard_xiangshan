@@ -95,7 +95,6 @@ class Rename(implicit p: Parameters) extends XSModule with HasPerfEvents {
     uop.srcState(1) := DontCare
     uop.srcState(2) := DontCare
     uop.robIdx := DontCare
-    uop.debugInfo := DontCare
     uop.lqIdx := DontCare
     uop.sqIdx := DontCare
   })
@@ -152,9 +151,6 @@ class Rename(implicit p: Parameters) extends XSModule with HasPerfEvents {
       // normal fp inst
       Mux(needFpDest(i), fpFreeList.io.allocatePhyReg(i),
         /* default */0.U))
-
-    // Assign performance counters
-    uops(i).debugInfo.renameTime := GTimer()
 
     io.out(i).valid := io.in(i).valid && intFreeList.io.canAllocate && fpFreeList.io.canAllocate && !io.robCommits.isWalk
     io.out(i).bits := uops(i)

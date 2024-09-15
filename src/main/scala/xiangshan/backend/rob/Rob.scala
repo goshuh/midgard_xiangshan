@@ -163,14 +163,13 @@ class RobExceptionInfo(implicit p: Parameters) extends XSBundle {
   val replayInst = Bool() // redirect to that inst itself
   val singleStep = Bool() // TODO add frontend hit beneath
   val crossPageIPFFix = Bool()
-  val trigger = new TriggerCf
 
 //  def trigger_before = !trigger.getTimingBackend && trigger.getHitBackend
 //  def trigger_after = trigger.getTimingBackend && trigger.getHitBackend
-  def has_exception = exceptionVec.asUInt.orR || flushPipe || singleStep || replayInst || trigger.canFire
-  def not_commit = exceptionVec.asUInt.orR || singleStep || replayInst || trigger.canFire
+  def has_exception = exceptionVec.asUInt.orR || flushPipe || singleStep || replayInst
+  def not_commit = exceptionVec.asUInt.orR || singleStep || replayInst
   // only exceptions are allowed to writeback when enqueue
-  def can_writeback = exceptionVec.asUInt.orR || singleStep || trigger.canFire
+  def can_writeback = exceptionVec.asUInt.orR || singleStep
 }
 
 class ExceptionGen(implicit p: Parameters) extends XSModule with HasCircularQueuePtrHelper {
@@ -229,7 +228,6 @@ class ExceptionGen(implicit p: Parameters) extends XSModule with HasCircularQueu
         current.flushPipe := s1_out_bits.flushPipe || current.flushPipe
         current.replayInst := s1_out_bits.replayInst || current.replayInst
         current.singleStep := s1_out_bits.singleStep || current.singleStep
-        current.trigger := (s1_out_bits.trigger.asUInt | current.trigger.asUInt).asTypeOf(new TriggerCf)
       }
     }
   }.elsewhen (s1_out_valid && !s1_flush) {
@@ -409,33 +407,27 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
       val enqIndex = allocatePtrVec(i).value
       // store uop in data module and debug_microOp Vec
       debug_microOp(enqIndex) := enqUop
-      debug_microOp(enqIndex).debugInfo.dispatchTime := timer
-      debug_microOp(enqIndex).debugInfo.enqRsTime := timer
-      debug_microOp(enqIndex).debugInfo.selectTime := timer
-      debug_microOp(enqIndex).debugInfo.issueTime := timer
-      debug_microOp(enqIndex).debugInfo.writebackTime := timer
       when (enqUop.ctrl.blockBackward) {
         hasBlockBackward := true.B
       }
       when (enqUop.ctrl.noSpecExec) {
         hasNoSpecExec := true.B
       }
-      val enqHasTriggerCanFire = io.enq.req(i).bits.cf.trigger.getFrontendCanFire
       val enqHasException = ExceptionNO.selectFrontend(enqUop.cf.exceptionVec).asUInt.orR
       // the begin instruction of Svinval enqs so mark doingSvinval as true to indicate this process
-      when(!enqHasTriggerCanFire && !enqHasException && FuType.isSvinvalBegin(enqUop.ctrl.fuType, enqUop.ctrl.fuOpType, enqUop.ctrl.flushPipe))
+      when(!enqHasException && FuType.isSvinvalBegin(enqUop.ctrl.fuType, enqUop.ctrl.fuOpType, enqUop.ctrl.flushPipe))
       {
         doingSvinval := true.B
       }
       // the end instruction of Svinval enqs so clear doingSvinval
-      when(!enqHasTriggerCanFire && !enqHasException && FuType.isSvinvalEnd(enqUop.ctrl.fuType, enqUop.ctrl.fuOpType, enqUop.ctrl.flushPipe))
+      when(!enqHasException && FuType.isSvinvalEnd(enqUop.ctrl.fuType, enqUop.ctrl.fuOpType, enqUop.ctrl.flushPipe))
       {
         doingSvinval := false.B
       }
       // when we are in the process of Svinval software code area , only Svinval.vma and end instruction of Svinval can appear
       assert(!doingSvinval || (FuType.isSvinval(enqUop.ctrl.fuType, enqUop.ctrl.fuOpType, enqUop.ctrl.flushPipe) ||
         FuType.isSvinvalEnd(enqUop.ctrl.fuType, enqUop.ctrl.fuOpType, enqUop.ctrl.flushPipe)))
-      when (enqUop.ctrl.isWFI && !enqHasException && !enqHasTriggerCanFire) {
+      when (enqUop.ctrl.isWFI && !enqHasException) {
         hasWFI := true.B
       }
     }
@@ -455,10 +447,6 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
       val wbIdx = wb.bits.uop.robIdx.value
       debug_exuData(wbIdx) := wb.bits.data
       debug_exuDebug(wbIdx) := wb.bits.debug
-      debug_microOp(wbIdx).debugInfo.enqRsTime := wb.bits.uop.debugInfo.enqRsTime
-      debug_microOp(wbIdx).debugInfo.selectTime := wb.bits.uop.debugInfo.selectTime
-      debug_microOp(wbIdx).debugInfo.issueTime := wb.bits.uop.debugInfo.issueTime
-      debug_microOp(wbIdx).debugInfo.writebackTime := wb.bits.uop.debugInfo.writebackTime
 
       val debug_Uop = debug_microOp(wbIdx)
       XSInfo(true.B,
@@ -485,14 +473,12 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   val intrEnable = intrBitSetReg && !hasNoSpecExec && intr_safe
   val deqHasExceptionOrFlush = exceptionDataRead.valid && exceptionDataRead.bits.robIdx === deqPtr
   val deqHasException = deqHasExceptionOrFlush && (exceptionDataRead.bits.exceptionVec.asUInt.orR ||
-    exceptionDataRead.bits.singleStep || exceptionDataRead.bits.trigger.canFire)
+    exceptionDataRead.bits.singleStep)
   val deqHasFlushPipe = deqHasExceptionOrFlush && exceptionDataRead.bits.flushPipe
   val deqHasReplayInst = deqHasExceptionOrFlush && exceptionDataRead.bits.replayInst
   val exceptionEnable = writebacked(deqPtr.value) && deqHasException
 
   XSDebug(deqHasException && exceptionDataRead.bits.singleStep, "Debug Mode: Deq has singlestep exception\n")
-  XSDebug(deqHasException && exceptionDataRead.bits.trigger.getFrontendCanFire, "Debug Mode: Deq has frontend trigger exception\n")
-  XSDebug(deqHasException && exceptionDataRead.bits.trigger.getBackendCanFire, "Debug Mode: Deq has backend trigger exception\n")
 
   val isFlushPipe = writebacked(deqPtr.value) && (deqHasFlushPipe || deqHasReplayInst)
 
@@ -521,7 +507,6 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   io.exception.bits.uop.ctrl.singleStep := RegEnable(exceptionDataRead.bits.singleStep, exceptionHappen)
   io.exception.bits.uop.cf.crossPageIPFFix := RegEnable(exceptionDataRead.bits.crossPageIPFFix, exceptionHappen)
   io.exception.bits.isInterrupt := RegEnable(intrEnable, exceptionHappen)
-  io.exception.bits.uop.cf.trigger := RegEnable(exceptionDataRead.bits.trigger, exceptionHappen)
 
   XSDebug(io.flushOut.valid,
     p"generate redirect: pc 0x${Hexadecimal(io.exception.bits.uop.cf.pc)} intr $intrEnable " +
@@ -779,9 +764,8 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   for (i <- 0 until RenameWidth) {
     when (canEnqueue(i)) {
       val enqHasException = ExceptionNO.selectFrontend(io.enq.req(i).bits.cf.exceptionVec).asUInt.orR
-      val enqHasTriggerCanFire = io.enq.req(i).bits.cf.trigger.getFrontendCanFire
       val enqIsWritebacked = io.enq.req(i).bits.eliminatedMove
-      writebacked(allocatePtrVec(i).value) := enqIsWritebacked && !enqHasException && !enqHasTriggerCanFire
+      writebacked(allocatePtrVec(i).value) := enqIsWritebacked && !enqHasException
       val isStu = io.enq.req(i).bits.ctrl.fuType === FuType.stu
       store_data_writebacked(allocatePtrVec(i).value) := !isStu
     }
@@ -796,10 +780,9 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     when (wb.valid) {
       val wbIdx = wb.bits.uop.robIdx.value
       val wbHasException = ExceptionNO.selectByExu(wb.bits.uop.cf.exceptionVec, cfgs).asUInt.orR
-      val wbHasTriggerCanFire = if (cfgs.exists(_.trigger)) wb.bits.uop.cf.trigger.getBackendCanFire else false.B
       val wbHasFlushPipe = cfgs.exists(_.flushPipe).B && wb.bits.uop.ctrl.flushPipe
       val wbHasReplayInst = cfgs.exists(_.replayInst).B && wb.bits.uop.ctrl.replayInst
-      val block_wb = wbHasException || wbHasFlushPipe || wbHasReplayInst || wbHasTriggerCanFire
+      val block_wb = wbHasException || wbHasFlushPipe || wbHasReplayInst
       writebacked(wbIdx) := !block_wb
     }
   }
@@ -868,9 +851,6 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     XSError(canEnqueue(i) && io.enq.req(i).bits.ctrl.replayInst, "enq should not set replayInst")
     exceptionGen.io.enq(i).bits.singleStep := io.enq.req(i).bits.ctrl.singleStep
     exceptionGen.io.enq(i).bits.crossPageIPFFix := io.enq.req(i).bits.cf.crossPageIPFFix
-    exceptionGen.io.enq(i).bits.trigger.clear() // Don't care frontend timing and chain, backend hit and canFire
-    exceptionGen.io.enq(i).bits.trigger.frontendHit := io.enq.req(i).bits.cf.trigger.frontendHit
-    exceptionGen.io.enq(i).bits.trigger.frontendCanFire := io.enq.req(i).bits.cf.trigger.frontendCanFire
   }
 
   println(s"ExceptionGen:")
@@ -884,12 +864,6 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
     exc_wb.bits.replayInst      := configs.exists(_.replayInst).B && wb.bits.uop.ctrl.replayInst
     exc_wb.bits.singleStep      := false.B
     exc_wb.bits.crossPageIPFFix := false.B
-    // TODO: make trigger configurable
-    exc_wb.bits.trigger.clear() // Don't care frontend timing, chain, hit and canFire
-    exc_wb.bits.trigger.backendHit := Mux(configs.exists(_.trigger).B, wb.bits.uop.cf.trigger.backendHit,
-      0.U.asTypeOf(chiselTypeOf(exc_wb.bits.trigger.backendHit)))
-    exc_wb.bits.trigger.backendCanFire := Mux(configs.exists(_.trigger).B, wb.bits.uop.cf.trigger.backendCanFire,
-      0.U.asTypeOf(chiselTypeOf(exc_wb.bits.trigger.backendCanFire)))
     println(s"  [$i] ${configs.map(_.name)}: exception ${exceptionCases(i)}, " +
       s"flushPipe ${configs.exists(_.flushPipe)}, " +
       s"replayInst ${configs.exists(_.replayInst)}")
@@ -948,8 +922,6 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   XSPerfAccumulate("commitInstr", ifCommitReg(trueCommitCnt))
   val commitIsMove = commitDebugUop.map(_.ctrl.isMove)
   XSPerfAccumulate("commitInstrMove", ifCommit(PopCount(io.commits.commitValid.zip(commitIsMove).map{ case (v, m) => v && m })))
-  val commitMoveElim = commitDebugUop.map(_.debugInfo.eliminatedMove)
-  XSPerfAccumulate("commitInstrMoveElim", ifCommit(PopCount(io.commits.commitValid zip commitMoveElim map { case (v, e) => v && e })))
   XSPerfAccumulate("commitInstrFused", ifCommitReg(fuseCommitCnt))
   val commitIsLoad = io.commits.info.map(_.commitType).map(_ === CommitType.LOAD)
   val commitLoadValid = io.commits.commitValid.zip(commitIsLoad).map{ case (v, t) => v && t }
@@ -973,32 +945,13 @@ class RobImp(outer: Rob)(implicit p: Parameters) extends LazyModuleImp(outer)
   XSPerfAccumulate("waitLoadCycle", deqNotWritebacked && deqUopCommitType === CommitType.LOAD)
   XSPerfAccumulate("waitStoreCycle", deqNotWritebacked && deqUopCommitType === CommitType.STORE)
   XSPerfAccumulate("robHeadPC", io.commits.info(0).pc)
-  val dispatchLatency = commitDebugUop.map(uop => uop.debugInfo.dispatchTime - uop.debugInfo.renameTime)
-  val enqRsLatency = commitDebugUop.map(uop => uop.debugInfo.enqRsTime - uop.debugInfo.dispatchTime)
-  val selectLatency = commitDebugUop.map(uop => uop.debugInfo.selectTime - uop.debugInfo.enqRsTime)
-  val issueLatency = commitDebugUop.map(uop => uop.debugInfo.issueTime - uop.debugInfo.selectTime)
-  val executeLatency = commitDebugUop.map(uop => uop.debugInfo.writebackTime - uop.debugInfo.issueTime)
-  val rsFuLatency = commitDebugUop.map(uop => uop.debugInfo.writebackTime - uop.debugInfo.enqRsTime)
-  val commitLatency = commitDebugUop.map(uop => timer - uop.debugInfo.writebackTime)
-  def latencySum(cond: Seq[Bool], latency: Seq[UInt]): UInt = {
-    cond.zip(latency).map(x => Mux(x._1, x._2, 0.U)).reduce(_ +& _)
-  }
   for (fuType <- FuType.functionNameMap.keys) {
     val fuName = FuType.functionNameMap(fuType)
     val commitIsFuType = io.commits.commitValid.zip(commitDebugUop).map(x => x._1 && x._2.ctrl.fuType === fuType.U )
     XSPerfAccumulate(s"${fuName}_instr_cnt", ifCommit(PopCount(commitIsFuType)))
-    XSPerfAccumulate(s"${fuName}_latency_dispatch", ifCommit(latencySum(commitIsFuType, dispatchLatency)))
-    XSPerfAccumulate(s"${fuName}_latency_enq_rs", ifCommit(latencySum(commitIsFuType, enqRsLatency)))
-    XSPerfAccumulate(s"${fuName}_latency_select", ifCommit(latencySum(commitIsFuType, selectLatency)))
-    XSPerfAccumulate(s"${fuName}_latency_issue", ifCommit(latencySum(commitIsFuType, issueLatency)))
-    XSPerfAccumulate(s"${fuName}_latency_execute", ifCommit(latencySum(commitIsFuType, executeLatency)))
-    XSPerfAccumulate(s"${fuName}_latency_enq_rs_execute", ifCommit(latencySum(commitIsFuType, rsFuLatency)))
-    XSPerfAccumulate(s"${fuName}_latency_commit", ifCommit(latencySum(commitIsFuType, commitLatency)))
     if (fuType == FuType.fmac.litValue) {
       val commitIsFma = commitIsFuType.zip(commitDebugUop).map(x => x._1 && x._2.ctrl.fpu.ren3 )
       XSPerfAccumulate(s"${fuName}_instr_cnt_fma", ifCommit(PopCount(commitIsFma)))
-      XSPerfAccumulate(s"${fuName}_latency_enq_rs_execute_fma", ifCommit(latencySum(commitIsFma, rsFuLatency)))
-      XSPerfAccumulate(s"${fuName}_latency_execute_fma", ifCommit(latencySum(commitIsFma, executeLatency)))
     }
   }
 
