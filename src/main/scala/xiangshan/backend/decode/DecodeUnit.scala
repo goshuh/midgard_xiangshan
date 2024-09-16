@@ -619,11 +619,11 @@ class DecodeUnit(implicit p: Parameters) extends XSModule with DecodeUnitConstan
   // read dest location
   cs.ldest := ctrl_flow.instr(RD_MSB, RD_LSB)
 
-  // check for csrx ucid/ucsp and uatt
+  // check for csrx uatp/uatc/ucid/ucsp and uatt
   val priv_chk = !ctrl_flow.priv &&
-                    ((ctrl_flow.instr(31, 21) === 0x040.U) &&
-                     (ctrl_flow.instr(14, 12) =/= 0x000.U) &&
-                     (ctrl_flow.instr( 6,  0) === 0x073.U) ||
+                    ((ctrl_flow.instr(31, 22) === 0x20.U) &&
+                     (ctrl_flow.instr(13, 12) =/= 0x00.U) &&
+                     (ctrl_flow.instr( 6,  0) === 0x73.U) ||
                      (ctrl_flow.instr         === X64Decode.UATT))
 
   // fill in exception vector

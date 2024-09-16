@@ -190,8 +190,8 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
     vlb_req_pld.idx             := DontCare
     vlb_req_pld.kill            := src_kill ## false.B
 
-    tlb_res.ready               := src_res.ready && !s1_sel_q
-    vlb_res.ready               := src_res.ready &&  s1_sel_q
+    tlb_res.ready               := src_res.ready && !s0_sel
+    vlb_res.ready               := src_res.ready &&  s0_sel
 
     src_res.valid               := s1_sel_q ??  s1_vlb_vld    :: s1_tlb_vld
     src_res_pld.fast_miss       := s1_sel_q ?? !s1_vlb_hit    :: tlb_res_pld.fast_miss

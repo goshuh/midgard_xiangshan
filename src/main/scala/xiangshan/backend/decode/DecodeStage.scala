@@ -79,9 +79,9 @@ class DecodeStage(implicit p: Parameters) extends XSModule with HasPerfEvents {
   }
 
   for (i <- 0 until DecodeWidth) {
-    val priv_chk = io.in(i).valid     &&
-                   io.in(i).bits.priv && !priv_last(i) &&
-                  (io.in(i).bits.pc  =/=  X64Decode.UATG)
+    val priv_chk = io.in(i).valid      &&
+                   io.in(i).bits.priv  && !priv_last(i) &&
+                  (io.in(i).bits.instr =/= X64Decode.UATG)
 
     when (priv_chk) {
       io.out(i).bits.cf.exceptionVec(ExceptionNO.illegalInstr) := true.B

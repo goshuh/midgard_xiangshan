@@ -632,13 +632,14 @@ class Sbuffer(implicit p: Parameters) extends DCacheModule with HasSbufferConst 
   val uat_idx_q = Wire(UInt(SbufferIndexWidth.W))
 
   // serialize uat stores for vsc
-  val uat_set = io.dcache.req.fire      && uat_rdy   &&  uat_vec(sbuffer_out_s1_evictionIdx)
+  val uat_req = uat_vec(sbuffer_out_s1_evictionIdx)
+  val uat_set = io.dcache.req.fire      && uat_rdy   &&  uat_req
   val uat_clr = io.dcache.uat_resp.fire && uat_vld_q && (uat_idx_q === io.dcache.uat_resp.bits.id)
 
   uat_idx_q := RegEnable(sbuffer_out_s1_evictionIdx, uat_set)
   uat_vld_q := RegEnable(uat_set && !uat_clr, false.B, uat_set || uat_clr)
 
-  uat_rdy := !(sbuffer_out_s1_valid && uat_vec(sbuffer_out_s1_evictionIdx) && uat_vld_q)
+  uat_rdy := !(sbuffer_out_s1_valid && uat_req && uat_vld_q)
 
   io.dcache.req.valid := sbuffer_out_s1_valid && uat_rdy && !blockDcacheWrite
   io.dcache.req.bits := DontCare

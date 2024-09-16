@@ -1533,9 +1533,9 @@ class MainPipe(implicit p: Parameters) extends DCacheModule with HasPerfEvents {
   io.wb.bits.delay_release := s3_req_replace_dup_for_wb_valid
   io.wb.bits.miss_id := s3_req.miss_id
 
-  io.uat.valid    := RegNext(s2_fire_to_s3) && (s3_store_hit || s3_amo_hit)
+  io.uat.valid    := io.store_hit_resp.valid || atomic_hit_resp_valid
   io.uat.bits.cmd := DontCare
-  io.uat.bits.mcn := s2_req.addr >> blockOffBits
+  io.uat.bits.mcn := s3_req.addr >> blockOffBits
   io.uat.bits.vec := DontCare
 
   io.replace_access.valid := RegNext(s1_fire && (s1_req.isAMO || s1_req.isStore) && !s1_req.probe)
