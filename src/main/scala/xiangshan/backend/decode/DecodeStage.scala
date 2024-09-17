@@ -39,6 +39,7 @@ class DecodeStage(implicit p: Parameters) extends XSModule with HasPerfEvents {
     val fusion = Vec(DecodeWidth - 1, Input(Bool()))
 
     val redirect = Input(Valid(new Redirect))
+    val redirect_pend = Input(Bool())
   })
 
   val decoders = Seq.fill(DecodeWidth)(Module(new DecodeUnit))
@@ -95,7 +96,7 @@ class DecodeStage(implicit p: Parameters) extends XSModule with HasPerfEvents {
                           io.redirect.bits.priv,
                           Mux1H(vld_last, Cat(io.in.map(_.bits.priv).reverse))),
                       true.B,
-                      io.redirect.valid || io.in.head.fire)
+                      io.redirect.valid || io.in.head.fire && !io.redirect_pend)
 
   val hasValid = VecInit(io.in.map(_.valid)).asUInt.orR
   XSPerfAccumulate("utilization", PopCount(io.in.map(_.valid)))

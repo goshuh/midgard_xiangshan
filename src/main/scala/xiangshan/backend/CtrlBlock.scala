@@ -349,6 +349,7 @@ class CtrlBlockImp(outer: CtrlBlock)(implicit p: Parameters) extends LazyModuleI
   decode.io.intRat <> rat.io.intReadPorts
   decode.io.fpRat <> rat.io.fpReadPorts
   decode.io.redirect := stage2Redirect
+  decode.io.redirect_pend := pendingRedirect
 
   // memory dependency predict
   // when decode, send fold pc to mdp
