@@ -197,9 +197,7 @@ class MemBlockImp(outer: MemBlock) extends LazyModuleImp(outer)
 
   io.ise.expt  := dcache.io.ise
   io.ise.empty := RegNext(sbuffer.io.ise.empty, true.B)
-
   io.fsb       <> dcache.io.fsb
-
   io.uat       <> dcache.io.uat
 
   sbuffer.io.ise.drain := RegNext(io.ise.expt || io.ise.drain, false.B)

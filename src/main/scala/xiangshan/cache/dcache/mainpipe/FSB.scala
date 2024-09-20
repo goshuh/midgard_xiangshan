@@ -11,23 +11,23 @@ import  freechips.rocketchip.tilelink._
 import  chipsalliance.rocketchip.config._
 
 
-class FSBCReq(implicit p: Parameters) extends DCacheBundle {
+class FSBReq(implicit p: Parameters) extends DCacheBundle {
   val id   = UInt(reqIdWidth.W)
   val addr = Bits(PAddrBits.W)
   val data = UInt((DCacheBanks * DCacheSRAMRowBits).W)
   val mask = Bits(cfg.blockBytes.W)
 }
 
-class FSBC(edge: TLEdgeOut)(implicit p: Parameters)
+class FSB(edge: TLEdgeOut)(implicit p: Parameters)
   extends DCacheModule
 {
   val io = IO(new Bundle() {
-    val req   = Flipped(Decoupled(new FSBCReq))
+    val req   = Flipped(Decoupled(new FSBReq))
     val res   =             Valid(new DCacheLineResp)
     val bus_a =         Decoupled(new TLBundleA(edge.bundle))
     val bus_d = Flipped(Decoupled(new TLBundleD(edge.bundle)))
     val ise   =            Output(new Bool())
-    val fsb   =                    new FSBIO()
+    val fsb   =                   new FSBIO()
   })
 
   val

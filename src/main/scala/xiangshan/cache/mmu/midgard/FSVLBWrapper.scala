@@ -214,7 +214,9 @@ class FSVLBWrapper(N: Int, B: Boolean, P: Param)(implicit val p: Parameters) ext
     }
 
     if (B) {
-      src_req.ready    := Non(src_req.valid && src_res_pld.miss)
+      src_req.ready    := Non(src_res_pld.miss) &&
+                             (vlb_req.ready &&  s0_sel ||
+                              tlb_req.ready && !s0_sel)
 
       // missSameCycle
       src_res_pld.miss := Non(flush_i) && (s0_sel ?? vlb_res_mis :: tlb_res_pld.miss)

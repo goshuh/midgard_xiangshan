@@ -476,14 +476,14 @@ class DCache()(implicit p: Parameters) extends LazyModule with HasDCacheParamete
 
   val clientNode = TLClientNode(Seq(clientParameters))
 
-  val fsbcClientParameters = TLMasterPortParameters.v1(
+  val fsbClientParameters = TLMasterPortParameters.v1(
     Seq(TLMasterParameters.v1(
-      name = "fsbc",
+      name = "fsb",
       sourceId = IdRange(0, 1),
     )),
   )
 
-  val fsbcClientNode = TLClientNode(Seq(fsbcClientParameters))
+  val fsbClientNode = TLClientNode(Seq(fsbClientParameters))
 
   lazy val module = new DCacheImp(this)
 }
@@ -496,7 +496,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   val (bus, edge) = outer.clientNode.out.head
   require(bus.d.bits.data.getWidth == l1BusDataWidth, "DCache: tilelink width does not match")
 
-  val (fsbc_bus, fsbc_edge) = outer.fsbcClientNode.out.head
+  val (fsb_bus, fsb_edge) = outer.fsbClientNode.out.head
 
   println("DCache:")
   println("  DCacheSets: " + DCacheSets)
@@ -523,20 +523,19 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   val atomicsReplayUnit = Module(new AtomicsReplayEntry)
   val mainPipe   = Module(new MainPipe)
   val refillPipe = Module(new RefillPipe)
-  val fsbc       = Module(new FSBC(fsbc_edge))
+  val fsb        = Module(new FSB(fsb_edge))
   val missQueue  = Module(new MissQueue(edge))
   val probeQueue = Module(new ProbeQueue(edge))
   val wb         = Module(new WritebackQueue(edge))
 
-  fsbc_bus.a <> fsbc.io.bus_a
-  fsbc.io.bus_d <> fsbc_bus.d
+  fsb_bus.a <> fsb.io.bus_a
+  fsb.io.bus_d <> fsb_bus.d
 
   missQueue.io.hartId := io.hartId
   missQueue.io.l2_pf_store_only := RegNext(io.l2_pf_store_only, false.B)
 
-  io.ise := fsbc.io.ise
-  io.fsb <> fsbc.io.fsb
-
+  io.ise := fsb.io.ise
+  io.fsb <> fsb.io.fsb
   io.uat <> mainPipe.io.uat
 
   val errors = ldu.map(_.io.error) ++ // load error
@@ -842,15 +841,15 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   replacer.access(touchSets, touchWays)
 
   //----------------------------------------
-  // fsbc <=> sbuffer
-  fsbc.io.req.valid     := io.lsu.store.req.valid && sb_drain
-  fsbc.io.req.bits.id   := io.lsu.store.req.bits.id
-  fsbc.io.req.bits.addr := io.lsu.store.req.bits.addr
-  fsbc.io.req.bits.data := io.lsu.store.req.bits.data
-  fsbc.io.req.bits.mask := io.lsu.store.req.bits.mask
+  // fsb <=> sbuffer
+  fsb.io.req.valid     := io.lsu.store.req.valid && sb_drain
+  fsb.io.req.bits.id   := io.lsu.store.req.bits.id
+  fsb.io.req.bits.addr := io.lsu.store.req.bits.addr
+  fsb.io.req.bits.data := io.lsu.store.req.bits.data
+  fsb.io.req.bits.mask := io.lsu.store.req.bits.mask
 
-  io.lsu.store.fsb_ready := fsbc.io.req.ready
-  io.lsu.store.fsb_resp  <> fsbc.io.res
+  io.lsu.store.fsb_ready := fsb.io.req.ready
+  io.lsu.store.fsb_resp  <> fsb.io.res
 
   //----------------------------------------
   // assertions
@@ -948,11 +947,11 @@ class DCacheWrapper()(implicit p: Parameters) extends LazyModule with HasXSParam
 
   val useDcache = coreParams.dcacheParametersOpt.nonEmpty
   val clientNode = if (useDcache) TLIdentityNode() else null
-  val fsbcClientNode = if (useDcache) TLIdentityNode() else null
+  val fsbClientNode = if (useDcache) TLIdentityNode() else null
   val dcache = if (useDcache) LazyModule(new DCache()) else null
   if (useDcache) {
-    clientNode     := dcache.clientNode
-    fsbcClientNode := dcache.fsbcClientNode
+    clientNode    := dcache.clientNode
+    fsbClientNode := dcache.fsbClientNode
   }
 
   lazy val module = new LazyModuleImp(this) with HasPerfEvents {

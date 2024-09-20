@@ -285,6 +285,9 @@ class BSMMUWrapper(implicit p: Parameters) extends LazyModule{
                                 P.clWid.U,
                                 TLPermissions.toT)._2
 
+    // always require ProbeAckData, specific to xs
+    i.b.bits.data := 1.U
+
     // c channel
     i.c.ready   := chc_mis_req_raw && (chc_sel_inv ?? true.B      :: prb_res.ready) ||
                    chc_hit_req_raw && (chc_sel_inv ?? chc_wrb_gnt :: prb_res.ready) ||
