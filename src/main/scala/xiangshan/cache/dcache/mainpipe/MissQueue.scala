@@ -307,7 +307,6 @@ class MissEntry(edge: TLEdgeOut)(implicit p: Parameters) extends DCacheModule {
       hasData := true.B
     }.otherwise {
       // Grant
-      assert(full_overwrite)
       for (i <- 0 until blockRows) {
         refill_and_store_data(i) := new_data(i)
       }
