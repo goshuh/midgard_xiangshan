@@ -43,6 +43,15 @@ class FpuCsrIO extends Bundle {
   val frm = Input(UInt(3.W))
 }
 
+// uat support
+class UATM extends Bundle {
+  val h  = UInt(5.W)
+  val c  = UInt(64.W)
+  val cu = UInt(64.W)
+  val i  = UInt(64.W)
+  val iu = UInt(64.W)
+}
+
 
 class PerfCounterIO(implicit p: Parameters) extends XSBundle {
   val perfEventsFrontend  = Vec(numCSRPCntFrontend, new PerfEvent)
@@ -517,6 +526,17 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
     perfCnts(i) := Mux(mcountinhibit(i+3) | !perfEventscounten(i), perfCnts(i), perfCnts(i) + perf_events(i).value)
   }
 
+  if (coreParams.L2CacheParamsOpt.isEmpty) {
+    val u = RegNext(priviledgeMode === ModeU)
+    val s = RegNext(priviledgeMode === ModeS)
+    val r = RegNext(csrio.perf.retiredInstr)
+
+    perfCnts(25) := perfCnts(25) + Mux(u, 1.U, 0.U)
+    perfCnts(26) := perfCnts(26) + Mux(u, r,   0.U)
+    perfCnts(27) := perfCnts(27) + Mux(s, 1.U, 0.U)
+    perfCnts(28) := perfCnts(28) + Mux(s, r,   0.U)
+  }
+
   val sfsbbase = dontTouch(Reg(UInt(64.W)))
   val sfsbmask = dontTouch(Reg(UInt(64.W)))
   val sfsbhead = dontTouch(Reg(UInt(64.W)))
@@ -778,6 +798,12 @@ class CSR(implicit p: Parameters) extends FunctionUnit with HasCSRConst with PMP
   tlbBundle.uatp_changed := RegNext(resetUatp, false.B)
   tlbBundle.uatc_changed := RegNext(resetUatc, false.B)
   tlbBundle.ucid_changed := RegNext(resetUcid, false.B)
+
+  tlbBundle.uatm.h  := mhartid(5, 0)
+  tlbBundle.uatm.c  := mcycle
+  tlbBundle.uatm.cu := perfCnts(25)
+  tlbBundle.uatm.i  := minstret
+  tlbBundle.uatm.iu := perfCnts(26)
 
   private val illegalRetTarget = WireInit(false.B)
 

@@ -23,7 +23,7 @@ import chisel3.util._
 import utils._
 import xiangshan._
 import xiangshan.backend.exu._
-import xiangshan.backend.fu.CSRFileIO
+import xiangshan.backend.fu._
 import xiangshan.backend.fu.fpu.FMAMidResultIO
 
 import midgard._
@@ -40,6 +40,7 @@ class FUBlockExtraIO(configs: Seq[(ExuConfig, Int)])(implicit p: Parameters) ext
   val hasFence = configs.map(_._1).contains(JumpCSRExeUnitCfg)
   val hasFrm = configs.map(_._1).contains(FmacExeUnitCfg) || configs.map(_._1).contains(FmiscExeUnitCfg)
   val hasUatc = configs.map(_._1).contains(AluExeUnitCfg)
+  val hasUatm = configs.map(_._1).contains(AluExeUnitCfg)
   val numRedirectOut = configs.filter(_._1.hasRedirect).map(_._2).sum
 
   val exuRedirect = Vec(numRedirectOut, ValidIO(new ExuOutput))
@@ -47,6 +48,7 @@ class FUBlockExtraIO(configs: Seq[(ExuConfig, Int)])(implicit p: Parameters) ext
   val fenceio = if (hasFence) Some(new FenceIO) else None
   val frm = if (hasFrm) Some(Input(UInt(3.W))) else None
   val uatc = if (hasUatc) Some(Input(new frontside.VSCCfg())) else None
+  val uatm = if (hasUatm) Some(Input(new UATM())) else None
 }
 
 class FUBlock(configs: Seq[(ExuConfig, Int)])(implicit p: Parameters) extends XSModule {
@@ -104,6 +106,10 @@ class FUBlock(configs: Seq[(ExuConfig, Int)])(implicit p: Parameters) extends XS
 
     if (exu.uatc.isDefined) {
       exu.uatc.get := io.extra.uatc.get
+    }
+
+    if (exu.uatm.isDefined) {
+      exu.uatm.get := io.extra.uatm.get
     }
   }
 

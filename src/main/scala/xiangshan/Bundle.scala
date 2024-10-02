@@ -38,7 +38,7 @@ import Chisel.experimental.chiselName
 import chipsalliance.rocketchip.config.Parameters
 import chisel3.util.BitPat.bitPatToUInt
 import xiangshan.backend.exu.ExuConfig
-import xiangshan.backend.fu.PMPEntry
+import xiangshan.backend.fu._
 import xiangshan.frontend.Ftq_Redirect_SRAMEntry
 import xiangshan.frontend.AllFoldedHistories
 import xiangshan.frontend.AllAheadFoldedHistoryOldestBits
@@ -455,6 +455,7 @@ class TlbCsrBundle(implicit p: Parameters) extends XSBundle {
   val uatp = new TlbUatpBundle()
   val uatc = new TlbUatcBundle()
   val ucid = new TlbUcidBundle()
+  val uatm = new UATM()
 
   val satp_changed = Bool()
   val uatp_changed = Bool()

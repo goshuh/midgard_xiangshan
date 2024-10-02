@@ -208,48 +208,6 @@ trait HaveAXI4MemPort {
   }
 }
 
-trait HaveAXI4PeripheralPort { this: BaseSoC =>
-  // on-chip devices: 0x3800_0000 - 0x3fff_ffff 0x0000_0000 - 0x0000_0fff
-  val onChipPeripheralRange = AddressSet(0x38000000L, 0x07ffffffL)
-  val uartRange = AddressSet(0x40600000, 0xf)
-  val uartDevice = new SimpleDevice("serial", Seq("xlnx,xps-uartlite-1.00.a"))
-  val uartParams = AXI4SlaveParameters(
-    address = Seq(uartRange),
-    regionType = RegionType.UNCACHED,
-    supportsRead = TransferSizes(1, 8),
-    supportsWrite = TransferSizes(1, 8),
-    resources = uartDevice.reg
-  )
-
-  val peripheralRange = AddressSet(
-    0x0, 0x7fffffff
-  ).subtract(onChipPeripheralRange).flatMap(x => x.subtract(uartRange))
-  val peripheralNode = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
-    Seq(AXI4SlaveParameters(
-      address = peripheralRange,
-      regionType = RegionType.UNCACHED,
-      supportsRead = TransferSizes(1, 8),
-      supportsWrite = TransferSizes(1, 8),
-      interleavedId = Some(0)
-    ), uartParams),
-    beatBytes = 8
-  )))
-
-  peripheralNode :=
-    AXI4IdIndexer(idBits = 3) :=
-    AXI4Buffer() :=
-    AXI4UserYanker() :=
-    AXI4Deinterleaver(8) :=
-    TLToAXI4() :=
-    TLBuffer() :=
-    peripheralXbar
-
-  val peripheral = InModuleBody {
-    peripheralNode.makeIOs()
-  }
-
-}
-
 class SoCMisc()(implicit p: Parameters) extends BaseSoC
   with HaveAXI4MemPort
   with PMAConst

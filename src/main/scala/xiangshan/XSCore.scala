@@ -301,8 +301,9 @@ class XSCoreImp(outer: XSCoreBase) extends LazyModuleImp(outer)
   val csrioIn = csrFenceMod.io.fuExtra.csrio.get
   val fenceio = csrFenceMod.io.fuExtra.fenceio.get
 
-  exuBlocks.filter(_.fuConfigs.map(_._1).contains(AluExeUnitCfg)).foreach {
-    _.io.fuExtra.uatc.get := csrioIn.tlb.uatc
+  exuBlocks.filter(_.fuConfigs.map(_._1).contains(AluExeUnitCfg)).foreach { m =>
+    m.io.fuExtra.uatc.get := csrioIn.tlb.uatc
+    m.io.fuExtra.uatm.get := csrioIn.tlb.uatm
   }
 
   frontend.io.backend <> ctrlBlock.io.frontend

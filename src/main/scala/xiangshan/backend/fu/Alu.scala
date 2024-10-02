@@ -21,6 +21,7 @@ import chisel3._
 import chisel3.util._
 import utils.{LookupTree, LookupTreeDefault, ParallelMux, SignExt, ZeroExt}
 import xiangshan._
+import xiangshan.backend.fu._
 
 import midgard._
 import midgard.util._
@@ -103,6 +104,7 @@ class MiscResultSelect(implicit p: Parameters) extends XSModule {
     val and, or, xor, orcb, orh48, sextb, packh, sexth, packw, revb, rev8, pack = Input(UInt(XLEN.W))
     val src = Input(UInt(XLEN.W))
     val uatc = Input(new frontside.VSCCfg())
+    val uatm = Input(new UATM())
     val miscRes = Output(UInt(XLEN.W))
   })
 
@@ -131,12 +133,18 @@ class MiscResultSelect(implicit p: Parameters) extends XSModule {
   val uat_idx   = ShL(uat_top_s | uat_idx_s & ~uat_vmask | ShR(uat_vmask, 1), 1) | Any(uat_vsc_s)
   val uat_res   = uat_idx | (Any(uat_idx & ~Ext(smask, 64)) ## 0.U(63.W))
 
+  val csr_res   = Mux(io.src(3, 0) === 1.U, 2.U,        0.U) |
+                  Mux(io.src(3, 0) === 2.U, io.uatm.h,  0.U) |
+                  Mux(io.src(3, 0) === 3.U, io.uatm.c,  0.U) |
+                  Mux(io.src(3, 0) === 4.U, io.uatm.cu, 0.U) |
+                  Mux(io.src(3, 0) === 5.U, io.uatm.i,  0.U)
+
   val customRes = VecInit(Seq(
     Cat(0.U(31.W), io.src(31, 0), 0.U(1.W)),
     Cat(0.U(30.W), io.src(31, 0), 0.U(2.W)),
     Cat(0.U(29.W), io.src(31, 0), 0.U(3.W)),
     Cat(0.U(56.W), io.src(15, 8))))(io.func(1, 0))
-  val logicAdv = Mux(io.func(3), Mux(io.func(2), uat_res, customRes), revRes)
+  val logicAdv = Mux(io.func(3), Mux(io.func(2), Mux(io.func(0), csr_res, uat_res), customRes), revRes)
 
   val mask = Cat(Fill(15, io.func(0)), 1.U(1.W))
   val maskedLogicRes = mask & logicRes
@@ -200,6 +208,7 @@ class AluDataModule(implicit p: Parameters) extends XSModule {
   val io = IO(new Bundle() {
     val src = Vec(2, Input(UInt(XLEN.W)))
     val uatc = Input(new frontside.VSCCfg())
+    val uatm = Input(new UATM())
     val func = Input(FuOpType())
     val pred_taken, isBranch = Input(Bool())
     val result = Output(UInt(XLEN.W))
@@ -361,6 +370,7 @@ class AluDataModule(implicit p: Parameters) extends XSModule {
   miscResSel.io.pack    := pack
   miscResSel.io.src     := src1
   miscResSel.io.uatc    := io.uatc
+  miscResSel.io.uatm    := io.uatm
   val miscRes = miscResSel.io.miscRes
 
   val wordResSel = Module(new WordResultSelect)
@@ -393,12 +403,14 @@ class Alu(implicit p: Parameters) extends FUWithRedirect {
   val uop = io.in.bits.uop
 
   val uatc = IO(Input(new frontside.VSCCfg()))
+  val uatm = IO(Input(new UATM()))
 
   val isBranch = ALUOpType.isBranch(io.in.bits.uop.ctrl.fuOpType)
   val dataModule = Module(new AluDataModule)
 
   dataModule.io.src := io.in.bits.src.take(2)
   dataModule.io.uatc := uatc
+  dataModule.io.uatm := uatm
   dataModule.io.func := io.in.bits.uop.ctrl.fuOpType
   dataModule.io.pred_taken := uop.cf.pred_taken
   dataModule.io.isBranch := isBranch

@@ -49,7 +49,9 @@ class ExeUnit(config: ExuConfig)(implicit p: Parameters) extends Exu(config) {
   if (config.fuConfigs.contains(aluCfg)) {
     functionUnits.foreach {
       _ match {
-        case a: Alu => a.uatc <> uatc.get
+        case a: Alu =>
+          a.uatc <> uatc.get
+          a.uatm <> uatm.get
       }
     }
   }
