@@ -295,7 +295,12 @@ class SoCMisc()(implicit p: Parameters) extends BaseSoC
 
     pma.module.io <> cacheable_check
 
-    clint.module.io.rtcTick := clock.asBool
+    // div-4
+    val cnt_q = Wire(UInt(2.W))
+
+    cnt_q := RegNext(cnt_q + 1.U, 0.U)
+
+    clint.module.io.rtcTick := cnt_q(1).asBool
 
     val pll_ctrl_regs = Seq.fill(6){ RegInit(0.U(32.W)) }
     val pll_lock = RegNext(next = pll0_lock, init = false.B)
